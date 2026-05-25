@@ -19,11 +19,8 @@ interface MirrorStats {
     receivedBytes: number;
     framesDecoded: number;
     droppedFrames: number;
-    nalUnits: number;
-    spsCount: number;
-    ppsCount: number;
-    idrCount: number;
     reconnectCount: number;
+    deviceName: string;
 }
 
 interface MirrorViewProps {
@@ -31,30 +28,30 @@ interface MirrorViewProps {
     wsUrl?: string;
 }
 
-type NalType = 'sps' | 'pps' | 'idr' | 'sei' | 'other';
+// ws-scrcpy magic byte constants
+const MAGIC_BYTES_INITIAL = new Uint8Array([
+    0x73, 0x63, 0x72, 0x63, 0x70, 0x79, 0x5f, 0x69,
+    0x6e, 0x69, 0x74, 0x69, 0x61, 0x6c,
+]); // "scrcpy_initial"
+const MAGIC_BYTES_MESSAGE = new Uint8Array([
+    0x73, 0x63, 0x72, 0x63, 0x70, 0x79, 0x5f, 0x6d,
+    0x65, 0x73, 0x73, 0x61, 0x67, 0x65,
+]); // "scrcpy_message"
+const DEVICE_NAME_LENGTH = 64;
 
-function getNalType(nal: Uint8Array): NalType | null {
-    if (nal.length === 0) return null;
-    const type = nal[0] & 0x1f;
-    switch (type) {
-        case 7: return 'sps';
-        case 8: return 'pps';
-        case 5: return 'idr';
-        case 6: return 'sei';
-        default: return 'other';
+function arraysEqual(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
     }
+    return true;
 }
 
-function findStartCode(data: Uint8Array, offset = 0): [number, number] {
-    for (let i = offset; i + 2 < data.length; i++) {
-        if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1) {
-            return [i, 3];
-        }
-        if (i + 3 < data.length && data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0 && data[i + 3] === 1) {
-            return [i, 4];
-        }
-    }
-    return [-1, 0];
+function parseDeviceName(data: Uint8Array): string {
+    const nameBytes = data.subarray(MAGIC_BYTES_INITIAL.length, MAGIC_BYTES_INITIAL.length + DEVICE_NAME_LENGTH);
+    const nullTerm = nameBytes.indexOf(0);
+    const valid = nullTerm >= 0 ? nameBytes.subarray(0, nullTerm) : nameBytes;
+    return new TextDecoder().decode(valid);
 }
 
 export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorViewProps) {
@@ -62,7 +59,7 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
     const playerRef = useRef<BasePlayer | null>(null);
     const interactionRef = useRef<InteractionHandler | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
-    const bufferRef = useRef<Uint8Array>(new Uint8Array());
+    const hasInitialInfo = useRef(false);
     const statsRef = useRef<MirrorStats>({
         wsState: 'idle',
         playerName: 'none',
@@ -70,11 +67,8 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
         receivedBytes: 0,
         framesDecoded: 0,
         droppedFrames: 0,
-        nalUnits: 0,
-        spsCount: 0,
-        ppsCount: 0,
-        idrCount: 0,
         reconnectCount: 0,
+        deviceName: '',
     });
     const [stats, setStats] = useState<MirrorStats>(statsRef.current);
     const [players, setPlayers] = useState<PlayerInfo[]>([]);
@@ -87,14 +81,12 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
 
     const detectPlayers = useCallback(() => {
         const detected: PlayerInfo[] = [];
-        // WebCodecs - primary
         detected.push({
             name: 'WebCodecs',
             codeName: 'webcodecs',
             supported: WebCodecsPlayer.isSupported(),
             active: false,
         });
-        // MSE - fallback 1
         detected.push({
             name: 'MSE Player',
             codeName: 'mse',
@@ -106,14 +98,12 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
     }, []);
 
     const selectPlayer = useCallback((deviceId: string): BasePlayer => {
-        // Try WebCodecs first
         if (WebCodecsPlayer.isSupported()) {
             console.log('[MirrorView] Selected WebCodecs player');
             setActiveCodeName('webcodecs');
             updateStats({ playerName: 'WebCodecs', decoderState: 'configuring' });
             return new WebCodecsPlayer(deviceId);
         }
-        // Fallback to MSE
         if (MsePlayer.isSupported()) {
             console.log('[MirrorView] Selected MSE Player fallback');
             setActiveCodeName('mse');
@@ -121,56 +111,6 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
             return new MsePlayer(deviceId);
         }
         throw new Error('No supported video decoder found. Requires WebCodecs or MSE.');
-    }, [updateStats]);
-
-    // Parse NAL units from raw H264 byte stream
-    const parseNalUnits = useCallback((chunk: Uint8Array): Uint8Array[] => {
-        const buffer = new Uint8Array(bufferRef.current.length + chunk.length);
-        buffer.set(bufferRef.current, 0);
-        buffer.set(chunk, bufferRef.current.length);
-        const nals: Uint8Array[] = [];
-        let offset = 0;
-
-        while (true) {
-            const [start, prefixLen] = findStartCode(buffer, offset);
-            if (start === -1) {
-                // No start code found — preserve up to 3 trailing bytes for
-                // potential straddling start code across the next chunk
-                const keep = Math.min(buffer.length, 3);
-                bufferRef.current = buffer.subarray(buffer.length - keep);
-                return nals;
-            }
-
-            const [nextStart] = findStartCode(buffer, start + prefixLen);
-            if (nextStart === -1) {
-                bufferRef.current = buffer.subarray(start);
-                return nals;
-            }
-
-            const nal = buffer.subarray(start + prefixLen, nextStart);
-            if (nal.length > 0) {
-                nals.push(nal);
-            }
-            offset = nextStart;
-        }
-    }, []);
-
-    const processNalUnits = useCallback((nals: Uint8Array[], player: BasePlayer) => {
-        const localStats = statsRef.current;
-        for (const nal of nals) {
-            localStats.nalUnits++;
-            const type = getNalType(nal);
-            if (type === 'sps') localStats.spsCount++;
-            else if (type === 'pps') localStats.ppsCount++;
-            else if (type === 'idr') localStats.idrCount++;
-            player.pushFrame(nal);
-        }
-        updateStats({
-            nalUnits: localStats.nalUnits,
-            spsCount: localStats.spsCount,
-            ppsCount: localStats.ppsCount,
-            idrCount: localStats.idrCount,
-        });
     }, [updateStats]);
 
     const handleControlMessage = useCallback((msg: ControlMessage) => {
@@ -184,10 +124,8 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
         if (!deviceId || !containerRef.current) return;
         const container = containerRef.current;
 
-        // 1. Detect available players
         detectPlayers();
 
-        // 2. Select best player
         let player: BasePlayer;
         try {
             player = selectPlayer(deviceId);
@@ -197,8 +135,8 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
             return;
         }
         playerRef.current = player;
+        hasInitialInfo.current = false;
 
-        // 3. Mount player in container
         const playerMount = document.createElement('div');
         playerMount.className = 'player-mount';
         playerMount.style.width = '100%';
@@ -212,11 +150,9 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
         player.setParent(playerMount);
         player.play();
 
-        // 4. Setup interaction handler
         const interaction = new InteractionHandler(player, handleControlMessage);
         interactionRef.current = interaction;
 
-        // 5. Update stats when frames are decoded
         player.setOnFrame((_frame: VideoFrame) => {
             updateStats({
                 framesDecoded: statsRef.current.framesDecoded + 1,
@@ -224,7 +160,6 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
             });
         });
 
-        // 6. Connect WebSocket
         const ws = new WebSocket(wsUrl);
         socketRef.current = ws;
         ws.binaryType = 'arraybuffer';
@@ -238,26 +173,42 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
         ws.onmessage = (event) => {
             const raw = event.data;
 
-            // Handle JSON device-info message from main process
             if (typeof raw === 'string') {
                 try {
                     const msg = JSON.parse(raw);
-                    if (msg.type === 'device-info') {
-                        console.log('[MirrorView] Device info:', msg.deviceName);
-                        return;
-                    }
+                    if (msg.type === 'ping') return;
                 } catch { /* ignore */ }
                 return;
             }
 
-            // Binary H264 data
-            if (raw instanceof ArrayBuffer) {
-                const data = new Uint8Array(raw);
-                updateStats({ receivedBytes: statsRef.current.receivedBytes + data.length });
-                const nals = parseNalUnits(data);
-                if (nals.length > 0) {
-                    processNalUnits(nals, player);
+            if (!(raw instanceof ArrayBuffer)) return;
+            const data = new Uint8Array(raw);
+            updateStats({ receivedBytes: statsRef.current.receivedBytes + data.length });
+
+            // Handle ws-scrcpy initial info header (first message from server)
+            if (!hasInitialInfo.current && data.length >= MAGIC_BYTES_INITIAL.length) {
+                const magic = data.subarray(0, MAGIC_BYTES_INITIAL.length);
+                if (arraysEqual(magic, MAGIC_BYTES_INITIAL)) {
+                    const deviceName = parseDeviceName(data);
+                    console.log('[MirrorView] Device:', deviceName);
+                    updateStats({ deviceName });
+                    hasInitialInfo.current = true;
+                    return;
                 }
+            }
+
+            // Handle scrcpy_message (clipboard/push response)
+            if (data.length >= MAGIC_BYTES_MESSAGE.length) {
+                const magic = data.subarray(0, MAGIC_BYTES_MESSAGE.length);
+                if (arraysEqual(magic, MAGIC_BYTES_MESSAGE)) {
+                    console.log('[MirrorView] Device message received, size:', data.length);
+                    return;
+                }
+            }
+
+            // Forward raw H264 data (with Annex B start codes) directly to player
+            if (player.getState() === BasePlayer.STATE.PLAYING) {
+                player.pushFrame(data);
             }
         };
 
@@ -285,9 +236,8 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
             playerRef.current = null;
             interactionRef.current = null;
             socketRef.current = null;
-            bufferRef.current = new Uint8Array();
         };
-    }, [deviceId, wsUrl, detectPlayers, selectPlayer, parseNalUnits, processNalUnits, updateStats, handleControlMessage]);
+    }, [deviceId, wsUrl, detectPlayers, selectPlayer, updateStats, handleControlMessage]);
 
     const playerIndicator = players.map(p => (
         <span
@@ -356,11 +306,8 @@ export function MirrorView({ deviceId, wsUrl = 'ws://localhost:8080' }: MirrorVi
                     </div>
                 </div>
                 <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-400">
-                    <span>SPS: {stats.spsCount}</span>
-                    <span>PPS: {stats.ppsCount}</span>
-                    <span>IDR: {stats.idrCount}</span>
-                    <span>NAL: {stats.nalUnits}</span>
-                    <span>Bytes: {(stats.receivedBytes / 1024).toFixed(1)}KB</span>
+                    <span>{stats.deviceName || 'Connecting...'}</span>
+                    <span>KB: {(stats.receivedBytes / 1024).toFixed(1)}</span>
                     <span>Reconn: {stats.reconnectCount}</span>
                 </div>
             </div>

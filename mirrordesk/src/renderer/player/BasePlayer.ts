@@ -66,7 +66,7 @@ export abstract class BasePlayer {
     }
 
     protected static isIFrame(frame: Uint8Array): boolean {
-        return frame && frame.length > 0 && (frame[0] & 0x1f) === 5;
+        return frame && frame.length > 4 && (frame[4] & 0x1f) === 5;
     }
 
     public abstract getImageDataURL(): string;

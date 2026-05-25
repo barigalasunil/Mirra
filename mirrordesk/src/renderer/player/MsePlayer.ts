@@ -151,15 +151,15 @@ export class MsePlayer extends BasePlayer {
 
         if (!frame || frame.length < 4) return;
 
-        const type = frame[0] & 0x1f;
+        const type = frame[4] & 0x1f;
 
         if (type === 7) {
-            this.sps = frame;
+            this.sps = frame.subarray(4);
             console.log(`[MsePlayer] SPS captured (${this.sps.length} bytes)`);
             return;
         }
         if (type === 8) {
-            this.pps = frame;
+            this.pps = frame.subarray(4);
             console.log(`[MsePlayer] PPS captured (${this.pps.length} bytes)`);
             return;
         }

@@ -125,12 +125,12 @@ export class WebCodecsPlayer extends BaseCanvasBasedPlayer {
     protected decode(data: Uint8Array): void {
         if (!data || data.length < 4) return;
 
-        const type = data[0] & 0x1f;
+        const type = data[4] & 0x1f;
         const isIDR = type === 5;
 
         if (type === 7) {
             try {
-                const { codec, width, height } = parseSPS(data);
+                const { codec, width, height } = parseSPS(data.subarray(4));
                 console.log(`[WebCodecsPlayer] SPS: ${codec}, ${width}x${height}`);
                 this.scaleCanvas(width, height);
 
