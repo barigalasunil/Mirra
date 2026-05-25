@@ -18,8 +18,8 @@ const getAdbPath = () => {
 };
 const getScrcpyServerPath = () => {
     return isDev
-        ? path_1.default.join(__dirname, '../../resources/scrcpy/scrcpy-server')
-        : path_1.default.join(process.resourcesPath, 'scrcpy', 'scrcpy-server');
+        ? path_1.default.join(__dirname, '../../resources/scrcpy/scrcpy-server.jar')
+        : path_1.default.join(process.resourcesPath, 'scrcpy', 'scrcpy-server.jar');
 };
 const wsManager = new scrcpy_ws_1.ScrcpyWsManager(8080, getAdbPath(), getScrcpyServerPath());
 wsManager.on('debug', (event) => {

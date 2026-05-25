@@ -15,8 +15,8 @@ const getAdbPath = () => {
 
 const getScrcpyServerPath = () => {
     return isDev
-        ? path.join(__dirname, '../../resources/scrcpy/scrcpy-server')
-        : path.join(process.resourcesPath, 'scrcpy', 'scrcpy-server');
+        ? path.join(__dirname, '../../resources/scrcpy/scrcpy-server.jar')
+        : path.join(process.resourcesPath, 'scrcpy', 'scrcpy-server.jar');
 };
 
 const wsManager = new ScrcpyWsManager(8080, getAdbPath(), getScrcpyServerPath());
