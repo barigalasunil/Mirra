@@ -180,7 +180,8 @@ export abstract class BaseCanvasBasedPlayer extends BasePlayer {
 
     public pushFrame(frame: Uint8Array): void {
         super.pushFrame(frame);
-        if (BasePlayer.isIFrame(frame)) {
+        const hasStartCode = frame.length >= 4 && frame[0] === 0 && frame[1] === 0 && frame[2] === 0 && frame[3] === 1;
+        if (hasStartCode && BasePlayer.isIFrame(frame)) {
             const { maxFps } = this.videoSettings;
             if (this.framesList.length > maxFps / 2) {
                 const dropped = this.framesList.length;

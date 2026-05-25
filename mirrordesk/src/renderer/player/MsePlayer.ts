@@ -3,8 +3,17 @@ import VideoSettings from './VideoSettings';
 import Size from './Size';
 import ScreenInfo from './ScreenInfo';
 import Rect from './Rect';
+import { StreamParser } from './StreamParser';
+import type { ParserStats } from './StreamParser';
 
-const MSE_MIME = 'video/mp4; codecs="avc1.42E01E"';
+export interface MseDiagnostics {
+    ready: boolean;
+    videoWidth: number;
+    videoHeight: number;
+    parserStats: ParserStats;
+    framesAppended: number;
+    appendErrors: number;
+}
 
 export class MsePlayer extends BasePlayer {
     public static readonly playerFullName = 'MSE Player';
@@ -17,7 +26,8 @@ export class MsePlayer extends BasePlayer {
     });
 
     public static isSupported(): boolean {
-        return typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(MSE_MIME);
+        return typeof MediaSource !== 'undefined'
+            && typeof MediaSource.isTypeSupported === 'function';
     }
 
     public readonly supportsScreenshot = true;
@@ -27,8 +37,14 @@ export class MsePlayer extends BasePlayer {
     private initSegment: Uint8Array | null = null;
     private sps: Uint8Array | null = null;
     private pps: Uint8Array | null = null;
-    private queuedFrames: Uint8Array[] = [];
     private ready = false;
+    private framesAppended = 0;
+    private appendErrors = 0;
+
+    private parser: StreamParser;
+    private queuedNals: Uint8Array[] = [];
+
+    private outputMime = 'video/mp4; codecs="avc1.42E01E"';
 
     constructor(udid: string) {
         super(udid, MsePlayer.playerFullName);
@@ -42,6 +58,9 @@ export class MsePlayer extends BasePlayer {
         this.videoElement.style.height = '100%';
         this.videoElement.style.objectFit = 'contain';
         this.tag = this.videoElement;
+
+        this.parser = new StreamParser();
+        this.parser.onNalUnit = (nal) => this.onParsedNal(nal);
     }
 
     public getPreferredVideoSetting(): VideoSettings {
@@ -63,6 +82,56 @@ export class MsePlayer extends BasePlayer {
         return canvas.toDataURL();
     }
 
+    private onParsedNal(nal: { type: number; data: Uint8Array }): void {
+        const type = nal.type;
+        const body = nal.data.subarray(nal.data.length > 4 && nal.data[3] === 1 ? 4 : 3);
+
+        if (type === 7) {
+            this.sps = body;
+            console.log(`[MsePlayer] SPS (${body.length} bytes): ${this.hex(body, 8)}`);
+            this.updateMimeFromSps(body);
+        } else if (type === 8) {
+            this.pps = body;
+            console.log(`[MsePlayer] PPS (${body.length} bytes): ${this.hex(body, 8)}`);
+        } else if (type === 5 || type === 1) {
+            if (this.sps && this.pps && !this.ready) {
+                this.createInitAndSetup();
+            }
+            if (this.ready) {
+                this.appendWithStartCode(nal.data);
+            } else {
+                this.queuedNals.push(nal.data);
+            }
+        }
+    }
+
+    private updateMimeFromSps(sps: Uint8Array): void {
+        if (sps.length < 4) return;
+        const profile = sps[0].toString(16).padStart(2, '0').toUpperCase();
+        const constraint = sps[1].toString(16).padStart(2, '0').toUpperCase();
+        const level = sps[2].toString(16).padStart(2, '0').toUpperCase();
+        this.outputMime = `video/mp4; codecs="avc1.${profile}${constraint}${level}"`;
+        console.log(`[MsePlayer] MIME: ${this.outputMime}`);
+
+        if (typeof MediaSource !== 'undefined' && !MediaSource.isTypeSupported(this.outputMime)) {
+            console.warn(`[MsePlayer] MIME not supported: ${this.outputMime}, trying fallback avc1.42E01E`);
+            this.outputMime = 'video/mp4; codecs="avc1.42E01E"';
+        }
+    }
+
+    private createInitAndSetup(): void {
+        this.initSegment = this.createInitSegment();
+        if (this.initSegment) {
+            this.setupMediaSource();
+        }
+    }
+
+    public pushFrame(frame: Uint8Array): void {
+        super.pushFrame(frame);
+        if (!frame || frame.length === 0) return;
+        this.parser.feed(frame);
+    }
+
     private createInitSegment(): Uint8Array | null {
         if (!this.sps || !this.pps) return null;
 
@@ -79,9 +148,9 @@ export class MsePlayer extends BasePlayer {
             0x61, 0x76, 0x63, 0x31,
         ]);
 
-        const profile = spsData[1];
-        const compatibility = spsData[2];
-        const level = spsData[3];
+        const profile = spsData[0];
+        const compatibility = spsData[1];
+        const level = spsData[2];
 
         const avcCData = new Uint8Array([
             0x01,
@@ -99,84 +168,54 @@ export class MsePlayer extends BasePlayer {
             ...ppsData,
         ]);
 
-        const stsdBody = new Uint8Array([
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x01,
-            0x00, 0x00, 0x00, 0x00,
-            0x61, 0x76, 0x63, 0x31,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x01,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ]);
+        const stsdBody = new Uint8Array(78);
+        stsdBody[0] = 0x00; stsdBody[1] = 0x00; stsdBody[2] = 0x00; stsdBody[3] = 0x00;
+        stsdBody[4] = 0x00; stsdBody[5] = 0x00; stsdBody[6] = 0x00; stsdBody[7] = 0x01;
+        stsdBody[8] = 0x00; stsdBody[9] = 0x00; stsdBody[10] = 0x00; stsdBody[11] = 0x00;
+        stsdBody[12] = 0x61; stsdBody[13] = 0x76; stsdBody[14] = 0x63; stsdBody[15] = 0x31;
+        stsdBody[16] = 0x00; stsdBody[17] = 0x00; stsdBody[18] = 0x00; stsdBody[19] = 0x00;
+        stsdBody[20] = 0x00; stsdBody[21] = 0x00; stsdBody[22] = 0x00; stsdBody[23] = 0x00;
+        stsdBody[24] = 0x00; stsdBody[25] = 0x00; stsdBody[26] = 0x00; stsdBody[27] = 0x00;
+        stsdBody[28] = 0x00; stsdBody[29] = 0x00; stsdBody[30] = 0x00; stsdBody[31] = 0x01;
+        stsdBody[32] = 0x00; stsdBody[33] = 0x00; stsdBody[34] = 0x00; stsdBody[35] = 0x00;
+        stsdBody[36] = 0x00; stsdBody[37] = 0x00; stsdBody[38] = 0x00; stsdBody[39] = 0x00;
+        stsdBody[40] = 0x00; stsdBody[41] = 0x00; stsdBody[42] = 0x00; stsdBody[43] = 0x00;
+        stsdBody[44] = 0x00; stsdBody[45] = 0x00; stsdBody[46] = 0x00; stsdBody[47] = 0x00;
+        stsdBody[48] = 0x00; stsdBody[49] = 0x00; stsdBody[50] = 0x00; stsdBody[51] = 0x00;
+        stsdBody[52] = 0x00; stsdBody[53] = 0x00; stsdBody[54] = 0x00; stsdBody[55] = 0x00;
+        stsdBody[56] = 0x00; stsdBody[57] = 0x00; stsdBody[58] = 0x00; stsdBody[59] = 0x00;
+        stsdBody[60] = 0x00; stsdBody[61] = 0x00; stsdBody[62] = 0x00; stsdBody[63] = 0x00;
+        stsdBody[64] = 0x00; stsdBody[65] = 0x00; stsdBody[66] = 0x00; stsdBody[67] = 0x00;
+        stsdBody[68] = 0x00; stsdBody[69] = 0x00; stsdBody[70] = 0x00; stsdBody[71] = 0x00;
+        stsdBody[72] = 0x00; stsdBody[73] = 0x00; stsdBody[74] = 0x00; stsdBody[75] = 0x00;
+        stsdBody[76] = 0x00; stsdBody[77] = 0x00;
 
-        const stsd = new Uint8Array(stsdBody.length + avcCData.length);
-        stsd.set(stsdBody, 0);
-        stsd.set(avcCData, stsdBody.length);
+        const stsdSection = new Uint8Array(stsdBody.length + avcCData.length);
+        stsdSection.set(stsdBody, 0);
+        stsdSection.set(avcCData, stsdBody.length);
 
-        const moovSize = 40 + stsd.length;
+        const moovSize = 40 + stsdSection.length;
         const moov = new Uint8Array(moovSize + 8);
         let off = 0;
-        const write32 = (v: number) => {
+        const w32 = (v: number) => {
             moov[off++] = (v >> 24) & 0xff;
             moov[off++] = (v >> 16) & 0xff;
             moov[off++] = (v >> 8) & 0xff;
             moov[off++] = v & 0xff;
         };
-        write32(moovSize + 8);
+        w32(moovSize + 8);
         moov[off++] = 0x6d; moov[off++] = 0x6f; moov[off++] = 0x6f; moov[off++] = 0x76;
-        write32(8);
+        w32(8);
         moov[off++] = 0x6d; moov[off++] = 0x76; moov[off++] = 0x68; moov[off++] = 0x64;
-        write32(8);
+        w32(8);
         moov[off++] = 0x74; moov[off++] = 0x72; moov[off++] = 0x61; moov[off++] = 0x6b;
-        write32(stsd.length + 8);
-        moov.set(stsd, off);
+        w32(stsdSection.length + 8);
+        moov.set(stsdSection, off);
 
         const init = new Uint8Array(ftyp.length + moovSize + 8);
         init.set(ftyp, 0);
         init.set(moov, ftyp.length);
         return init;
-    }
-
-    public pushFrame(frame: Uint8Array): void {
-        super.pushFrame(frame);
-
-        if (!frame || frame.length < 4) return;
-
-        const type = frame[4] & 0x1f;
-
-        if (type === 7) {
-            this.sps = frame.subarray(4);
-            console.log(`[MsePlayer] SPS captured (${this.sps.length} bytes)`);
-            return;
-        }
-        if (type === 8) {
-            this.pps = frame.subarray(4);
-            console.log(`[MsePlayer] PPS captured (${this.pps.length} bytes)`);
-            return;
-        }
-
-        if (this.sps && this.pps && !this.ready) {
-            this.initSegment = this.createInitSegment();
-            if (this.initSegment) {
-                this.setupMediaSource();
-            }
-            return;
-        }
-
-        if (this.ready) {
-            this.appendFrame(frame);
-        } else {
-            this.queuedFrames.push(frame);
-        }
     }
 
     private setupMediaSource(): void {
@@ -185,16 +224,17 @@ export class MsePlayer extends BasePlayer {
         this.mediaSource.onsourceopen = () => {
             if (!this.mediaSource) return;
             try {
-                this.sourceBuffer = this.mediaSource.addSourceBuffer(MSE_MIME);
+                this.sourceBuffer = this.mediaSource.addSourceBuffer(this.outputMime);
                 if (this.initSegment) {
                     this.sourceBuffer.appendBuffer(this.initSegment.buffer as ArrayBuffer);
                     this.sourceBuffer.onupdateend = () => {
                         this.sourceBuffer!.onupdateend = null;
                         this.ready = true;
-                        for (const frame of this.queuedFrames) {
-                            this.appendFrame(frame);
+                        console.log(`[MsePlayer] MediaSource ready, init segment appended`);
+                        for (const nal of this.queuedNals) {
+                            this.appendWithStartCode(nal);
                         }
-                        this.queuedFrames = [];
+                        this.queuedNals = [];
                         if (this.videoElement) {
                             this.videoElement.play().catch(() => {});
                         }
@@ -205,6 +245,12 @@ export class MsePlayer extends BasePlayer {
                 console.error(`[MsePlayer] SourceBuffer error:`, e);
             }
         };
+        this.mediaSource.onsourceended = () => {
+            console.log(`[MsePlayer] MediaSource ended`);
+        };
+        this.mediaSource.onsourceclose = () => {
+            console.log(`[MsePlayer] MediaSource closed`);
+        };
 
         this.videoElement.src = URL.createObjectURL(this.mediaSource);
     }
@@ -214,6 +260,7 @@ export class MsePlayer extends BasePlayer {
         const check = () => {
             if (this.videoElement && this.videoElement.videoWidth > 0) {
                 const { videoWidth, videoHeight } = this.videoElement;
+                console.log(`[MsePlayer] Video size detected: ${videoWidth}x${videoHeight}`);
                 const screenInfo = new ScreenInfo(
                     new Rect(0, 0, videoWidth, videoHeight),
                     new Size(videoWidth, videoHeight),
@@ -227,24 +274,32 @@ export class MsePlayer extends BasePlayer {
         setTimeout(check, 100);
     }
 
-    private nalToAvcc(nal: Uint8Array): Uint8Array {
-        const data = new Uint8Array(4 + nal.length);
-        data[0] = (nal.length >> 24) & 0xff;
-        data[1] = (nal.length >> 16) & 0xff;
-        data[2] = (nal.length >> 8) & 0xff;
-        data[3] = nal.length & 0xff;
-        data.set(nal, 4);
-        return data;
-    }
-
-    private appendFrame(frame: Uint8Array): void {
+    private appendWithStartCode(data: Uint8Array): void {
         if (!this.sourceBuffer || this.sourceBuffer.updating) return;
         try {
-            const avcc = this.nalToAvcc(frame);
+            const avcc = this.nalToAvcc(data);
             this.sourceBuffer.appendBuffer(avcc.buffer as ArrayBuffer);
-        } catch (e) {
-            console.error(`[MsePlayer] appendBuffer error:`, e);
+            this.framesAppended++;
+        } catch (e: any) {
+            this.appendErrors++;
+            console.error(`[MsePlayer] appendBuffer error #${this.appendErrors}: ${e.message}`);
         }
+    }
+
+    private nalToAvcc(nal: Uint8Array): Uint8Array {
+        const startCodeLen = (nal.length >= 4 && nal[0] === 0 && nal[1] === 0 && nal[2] === 0 && nal[3] === 1)
+            ? 4
+            : (nal.length >= 3 && nal[0] === 0 && nal[1] === 0 && nal[2] === 1)
+                ? 3
+                : 0;
+        const body = startCodeLen > 0 ? nal.subarray(startCodeLen) : nal;
+        const data = new Uint8Array(4 + body.length);
+        data[0] = (body.length >> 24) & 0xff;
+        data[1] = (body.length >> 16) & 0xff;
+        data[2] = (body.length >> 8) & 0xff;
+        data[3] = body.length & 0xff;
+        data.set(body, 4);
+        return data;
     }
 
     public play(): void {
@@ -271,9 +326,32 @@ export class MsePlayer extends BasePlayer {
         this.mediaSource = null;
         this.sourceBuffer = null;
         this.ready = false;
-        this.queuedFrames = [];
+        this.queuedNals = [];
         this.sps = null;
         this.pps = null;
         this.initSegment = null;
+        this.framesAppended = 0;
+        this.appendErrors = 0;
+        this.parser.reset();
+    }
+
+    getDiagnostics(): MseDiagnostics {
+        return {
+            ready: this.ready,
+            videoWidth: this.videoElement?.videoWidth || 0,
+            videoHeight: this.videoElement?.videoHeight || 0,
+            parserStats: this.parser.getStats(),
+            framesAppended: this.framesAppended,
+            appendErrors: this.appendErrors,
+        };
+    }
+
+    private hex(data: Uint8Array, max: number): string {
+        const len = Math.min(data.length, max);
+        const parts: string[] = [];
+        for (let i = 0; i < len; i++) {
+            parts.push(data[i].toString(16).padStart(2, '0'));
+        }
+        return parts.join(' ');
     }
 }
