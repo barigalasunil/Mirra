@@ -1,0 +1,17 @@
+{
+  "name": "mirra",
+  "version": "0.1.0",
+  "description": "Android & iOS screen mirroring for Windows",
+  "author": "Your Name",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/mirra"
+  },
+  "scripts": {
+    "dev": "cd mirrordesk && npm run dev",
+    "build": "cd mirrordesk && npm run build",
+    "install-app": "cd mirrordesk && npm install",
+    "release": "git tag v0.1.0 && git push origin v0.1.0"
+  }
+}

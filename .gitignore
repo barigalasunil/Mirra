@@ -1,10 +1,39 @@
-build/
-/dist/
-/build-*/
-/build_*/
-/release-*/
-.idea/
+# Dependencies
+node_modules/
+mirrordesk/node_modules/
+
+# Build outputs
+mirrordesk/dist/
+mirrordesk/dist-main/
+mirrordesk/release/
+
+# Python venv (iOS support)
+mirrordesk/resources/ios/.venv/
+
+# Large binary resources (download from Releases)
+mirrordesk/resources/ios/
+mirrordesk/resources/scrcpy/
+
+# Electron cache
+.electron/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+
+# Gradle
 .gradle/
-/x/
-local.properties
-/scrcpy-server
+
+# Docs (generated)
+mirrordesk/docs/

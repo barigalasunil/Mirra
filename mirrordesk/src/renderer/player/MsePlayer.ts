@@ -6,6 +6,8 @@ import Rect from './Rect';
 import { StreamParser } from './StreamParser';
 import type { ParserStats } from './StreamParser';
 
+const DEV_MODE = import.meta.env.DEV;
+
 export interface MseDiagnostics {
     ready: boolean;
     videoWidth: number;
@@ -43,6 +45,11 @@ export class MsePlayer extends BasePlayer {
 
     private parser: StreamParser;
     private queuedNals: Uint8Array[] = [];
+
+    /** Recording hook: fired for each VCL NAL (type 1/5) with its Annex-B start code. */
+    public onSample: ((data: Uint8Array, isKey: boolean, timestamp: number) => void) | null = null;
+    private sampleTimestamp = 0;
+    private readonly sampleTimestampIncrement = 33_333; // ~30fps
 
     private outputMime = 'video/mp4; codecs="avc1.42E01E"';
 
@@ -87,13 +94,20 @@ export class MsePlayer extends BasePlayer {
         const body = nal.data.subarray(nal.data.length > 4 && nal.data[3] === 1 ? 4 : 3);
 
         if (type === 7) {
-            this.sps = body;
-            console.log(`[MsePlayer] SPS (${body.length} bytes): ${this.hex(body, 8)}`);
-            this.updateMimeFromSps(body);
+            // `body` still contains the NAL header byte; strip it so the stored
+            // SPS starts at profile_idc (required for MIME + avcC).
+            this.sps = body.subarray(1);
+            if (DEV_MODE) console.log(`[MsePlayer] SPS (${this.sps.length} bytes): ${this.hex(this.sps, 8)}`);
+            this.updateMimeFromSps(this.sps);
         } else if (type === 8) {
-            this.pps = body;
-            console.log(`[MsePlayer] PPS (${body.length} bytes): ${this.hex(body, 8)}`);
+            this.pps = body.subarray(1);
+            if (DEV_MODE) console.log(`[MsePlayer] PPS (${this.pps.length} bytes): ${this.hex(this.pps, 8)}`);
         } else if (type === 5 || type === 1) {
+            if (this.onSample) {
+                const timestamp = this.sampleTimestamp;
+                this.sampleTimestamp += this.sampleTimestampIncrement;
+                this.onSample(nal.data, type === 5, timestamp);
+            }
             if (this.sps && this.pps && !this.ready) {
                 this.createInitAndSetup();
             }
@@ -332,6 +346,8 @@ export class MsePlayer extends BasePlayer {
         this.initSegment = null;
         this.framesAppended = 0;
         this.appendErrors = 0;
+        this.sampleTimestamp = 0;
+        this.onSample = null;
         this.parser.reset();
     }
 

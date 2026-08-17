@@ -1,74 +1,107 @@
-import { useEffect, useState, useRef } from 'react';
-import { Settings, Play, Camera, Monitor, Smartphone, Sun, Moon, Battery, Wifi, Usb, CheckCircle2 } from 'lucide-react';
+import { useEffect, useState, useRef, type CSSProperties } from 'react';
+import { Play, Camera, Monitor, Sun, CheckCircle2, Circle, Square, X, Pin, PinOff, MoreVertical, Info } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import type { AdbDevice, MirrorSettings, DeviceStatus } from '../shared/types';
-import { MirrorView } from './components/MirrorView';
+import type { AdbDevice, IosDevice, DeviceStatus } from '../shared/types';
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
 }
 
+type DeviceEntry =
+    | { kind: 'android'; id: string; name: string; model: string }
+    | { kind: 'ios'; id: string; name: string; productType: string; iosVersion: string };
+
 const electron = (window as any).electronAPI;
 
+const isScreenshotPopup = typeof window !== 'undefined' && window.location.hash === '#screenshot-popup';
+
 function App() {
-    const [devices, setDevices] = useState<AdbDevice[]>([]);
-    const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+    const [selectedDevice, setSelectedDevice] = useState<DeviceEntry | null>(null);
     const [status, setStatus] = useState<DeviceStatus | null>(null);
+    const [driversMissing, setDriversMissing] = useState(false);
+    const driversBannerDismissedRef = useRef(false);
+    const mirrorStartTime = useRef<number>(0);
     const [isMirroring, setIsMirroring] = useState(false);
     const [keepAwake, setKeepAwake] = useState(false);
     const [showWifiConnect, setShowWifiConnect] = useState(false);
     const [wifiIp, setWifiIp] = useState('');
     const [autoDiscoverInProgress, setAutoDiscoverInProgress] = useState(false);
-    const [debugLogs, setDebugLogs] = useState<string[]>([]);
-    const [toasts, setToasts] = useState<{ id: string; msg: string; type: 'success' | 'error' }[]>([]);
-    const [settings, setLocalSettings] = useState<MirrorSettings>({});
-    const [showSettings, setShowSettings] = useState(false);
+    const [toasts, setToasts] = useState<{ id: string; msg: string; type: 'success' | 'error' | 'info'; action?: { label: string; onClick: () => void } }[]>([]);
+    const [isStarting, setIsStarting] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordStartTime, setRecordStartTime] = useState(0);
+    const [recordElapsed, setRecordElapsed] = useState(0);
+    const [alwaysOnTop, setAlwaysOnTop] = useState(false);
     const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+    const [isIosMirroring, setIsIosMirroring] = useState(false);
+    const [isStartingIos, setIsStartingIos] = useState(false);
+    const [iosConnectionStatus, setIosConnectionStatus] = useState<'waiting' | 'connected' | 'disconnected' | null>(null);
+    const [sessionSeconds, setSessionSeconds] = useState(0);
 
-    const containerRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        // MirrorView handles its own sizing via canvas. No resize IPC needed.
-    }, []);
-
-    const addToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    const addToast = (msg: string, type: 'success' | 'error' | 'info' = 'success', action?: { label: string; onClick: () => void }, duration = 6000) => {
         const id = Math.random().toString(36).substring(7);
-        setToasts(prev => [...prev, { id, msg, type }]);
-        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
+        setToasts(prev => [...prev, { id, msg, type, action }]);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration);
     };
 
     useEffect(() => {
         initTheme();
-        initSettings();
+        initAlwaysOnTop();
         pollDevices();
         const interval = setInterval(pollDevices, 3000);
         return () => clearInterval(interval);
     }, []);
 
     useEffect(() => {
-        let debugListener = (event: any) => {
-            const timestamp = new Date().toLocaleTimeString();
-            setDebugLogs((prev) => [`[${timestamp}] ${event.category}: ${event.message}`, ...prev].slice(0, 25));
+        let stoppedListener = (_data: { code: number }) => {
+            const elapsed = Date.now() - mirrorStartTime.current;
+            if (elapsed < 2000) {
+                console.log('[renderer] ignoring early scrcpy exit, elapsed:', elapsed);
+                return;
+            }
+            setIsMirroring(false);
+            setIsRecording(false);
+            setSessionSeconds(0);
+            addToast('Mirror session ended', 'success');
         };
-        electron.onScrcpyDebug(debugListener);
+        electron.onScrcpyStopped(stoppedListener);
 
         let errorListener = (msg: string) => {
             addToast(msg, 'error');
             setIsMirroring(false);
+            setSessionSeconds(0);
         };
         electron.onScrcpyError(errorListener);
 
-        let startedListener = (_deviceId: string) => {
-            setIsMirroring(true);
-        };
-        electron.onScrcpyStarted(startedListener);
-
         return () => {
-            electron.removeScrcpyDebug();
+            electron.removeScrcpyStopped();
             electron.removeScrcpyError();
-            electron.removeScrcpyStarted();
         };
     }, []);
+
+    useEffect(() => {
+        if (!isMirroring && !isIosMirroring) return;
+        const interval = setInterval(() => setSessionSeconds(s => s + 1), 1000);
+        return () => clearInterval(interval);
+    }, [isMirroring, isIosMirroring]);
+
+    useEffect(() => {
+        const savedListener = (filePath: string) => {
+            const parts = filePath.split(/[\\/]/);
+            addToast(`Saved: ${parts[parts.length - 1]}`, 'success');
+        };
+        electron.onRecordingSaved(savedListener);
+        return () => electron.removeRecordingSaved();
+    }, []);
+
+    useEffect(() => {
+        if (!isRecording) return;
+        const interval = setInterval(() => {
+            setRecordElapsed(Math.floor((Date.now() - recordStartTime) / 1000));
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [isRecording, recordStartTime]);
 
     useEffect(() => {
         if (!selectedDevice) {
@@ -82,47 +115,108 @@ function App() {
 
     const initTheme = async () => {
         const storedTheme = await electron.storeGet('theme', 'dark');
-        setTheme(storedTheme);
+        setTheme(storedTheme === 'dark' ? 'dark' : 'light');
         if (storedTheme === 'dark') document.documentElement.classList.add('dark');
         else document.documentElement.classList.remove('dark');
     };
 
-    const toggleTheme = () => {
-        const newTheme = theme === 'dark' ? 'light' : 'dark';
-        setTheme(newTheme);
-        electron.storeSet('theme', newTheme);
-        if (newTheme === 'dark') document.documentElement.classList.add('dark');
+    const toggleTheme = async () => {
+        const next = theme === 'dark' ? 'light' : 'dark';
+        setTheme(next);
+        await electron.storeSet('theme', next);
+        if (next === 'dark') document.documentElement.classList.add('dark');
         else document.documentElement.classList.remove('dark');
     };
 
-    const initSettings = async () => {
-        const s = await electron.storeGet('mirror-settings', {});
-        setLocalSettings(s);
+    const initAlwaysOnTop = async () => {
+        const val = await electron.getAlwaysOnTop();
+        setAlwaysOnTop(!!val);
     };
 
-    const saveSettings = (newSettings: MirrorSettings) => {
-        setLocalSettings(newSettings);
-        electron.storeSet('mirror-settings', newSettings);
-        if (isMirroring && selectedDevice) {
-            electron.scrcpyStart(selectedDevice, newSettings);
-        }
+    const toggleAlwaysOnTop = async () => {
+        const newValue = !alwaysOnTop;
+        setAlwaysOnTop(newValue);
+        await electron.setAlwaysOnTop(newValue);
     };
+
+    useEffect(() => {
+        const menuListener = (action: string) => {
+            if (action === 'wifi') setShowWifiConnect(true);
+            else if (action === 'toggle-theme') toggleTheme();
+            else if (action === 'toggle-pin') toggleAlwaysOnTop();
+        };
+        electron.onMenuAction(menuListener);
+        return () => electron.removeMenuAction();
+    }, [toggleTheme, toggleAlwaysOnTop]);
+
+    useEffect(() => {
+        const startedListener = () => {
+            setIsIosMirroring(true);
+            setIosConnectionStatus('waiting');
+        };
+        electron.onIosMirrorStarted(startedListener);
+        const stoppedListener = (code: number | null) => {
+            setIsIosMirroring(false);
+            setIosConnectionStatus(null);
+            addToast('iOS mirroring stopped', 'success');
+            console.log('[ios-mirror] uxplay exited, code', code);
+        };
+        electron.onIosMirrorStopped(stoppedListener);
+        const errorListener = (detail: string) => {
+            const bonjourRelated = /bonjour|mdns|dns-sd/i.test(detail);
+            if (bonjourRelated) {
+                addToast("iOS mirroring needs Apple's Bonjour service. Install iTunes or the Apple Devices app and try again.", 'error');
+            } else {
+                addToast(`iOS mirroring error: ${detail || 'unknown'}`, 'error');
+            }
+            setIsIosMirroring(false);
+            setIosConnectionStatus(null);
+        };
+        electron.onIosMirrorError(errorListener);
+        const instructionListener = (msg: string) => addToast(msg, 'info', undefined, 8000);
+        electron.onIosMirrorInstruction(instructionListener);
+        const readyListener = () => setIsIosMirroring(true);
+        electron.onIosMirrorReady(readyListener);
+        const clientConnectedListener = () => setIosConnectionStatus('connected');
+        electron.onIosClientConnected(clientConnectedListener);
+        const clientDisconnectedListener = () => setIosConnectionStatus('disconnected');
+        electron.onIosClientDisconnected(clientDisconnectedListener);
+        return () => {
+            electron.removeIosMirrorStarted();
+            electron.removeIosMirrorStopped();
+            electron.removeIosMirrorError();
+            electron.removeIosMirrorInstruction();
+            electron.removeIosMirrorReady();
+            electron.removeIosClientConnected();
+            electron.removeIosClientDisconnected();
+        };
+    }, []);
 
     const pollDevices = async () => {
-        const list = await electron.adbDevices();
-        setDevices(list);
-        if (list.length > 0) {
-            setSelectedDevice(prev => prev && list.find((d: any) => d.id === prev) ? prev : list[0].id);
+        const [androidDevs, iosResult] = await Promise.all([
+            electron.adbDevices(),
+            electron.iosDevices(),
+        ]);
+        setDriversMissing(!!iosResult?.driversMissing && !driversBannerDismissedRef.current);
+        const all: DeviceEntry[] = [
+            ...androidDevs.map((d: AdbDevice) => ({ kind: 'android' as const, id: d.id, name: d.model || d.id, model: d.model })),
+            ...(iosResult?.devices ?? []).map((d: IosDevice) => ({ kind: 'ios' as const, id: d.udid, name: d.name, productType: d.productType, iosVersion: d.iosVersion })),
+        ];
+        if (all.length > 0) {
+            setSelectedDevice(prev => prev && all.find(d => d.id === prev.id && d.kind === prev.kind) ? prev : all[0]);
         } else {
             setSelectedDevice(null);
         }
     };
 
     const pollStatus = async () => {
-        if (selectedDevice) {
-            const st = await electron.adbDeviceStatus(selectedDevice);
-            setStatus(st);
+        if (!selectedDevice) return;
+        if (selectedDevice.kind === 'ios') {
+            setStatus(null);
+            return;
         }
+        const st = await electron.adbDeviceStatus(selectedDevice.id);
+        setStatus(st);
     };
 
     const handleConnectWifi = async () => {
@@ -138,11 +232,11 @@ function App() {
     };
 
     const handleEnableWifi = async () => {
-        if (!selectedDevice) return;
-        const res = await electron.adbEnableWifi(selectedDevice);
+        if (!selectedDevice || selectedDevice.kind !== 'android') return;
+        const res = await electron.adbEnableWifi(selectedDevice.id);
         if (res.success) {
             addToast('Wireless debugging enabled on device', 'success');
-            const discover = await electron.adbDiscoverIp(selectedDevice);
+            const discover = await electron.adbDiscoverIp(selectedDevice.id);
             if (discover.success && discover.ip) {
                 setWifiIp(`${discover.ip}:5555`);
                 addToast(`Detected device IP ${discover.ip}:5555`, 'success');
@@ -153,10 +247,10 @@ function App() {
     };
 
     const handleDiscoverIp = async () => {
-        if (!selectedDevice) return;
+        if (!selectedDevice || selectedDevice.kind !== 'android') return;
         setAutoDiscoverInProgress(true);
         try {
-            const discover = await electron.adbDiscoverIp(selectedDevice);
+            const discover = await electron.adbDiscoverIp(selectedDevice.id);
             if (discover.success && discover.ip) {
                 setWifiIp(`${discover.ip}:5555`);
                 addToast(`Discovered device IP ${discover.ip}:5555`, 'success');
@@ -168,362 +262,490 @@ function App() {
         }
     };
 
-    const toggleMirror = () => {
+    const toggleMirror = async () => {
         if (!selectedDevice) return;
+        if (isStarting) return;
+
+        if (selectedDevice.kind === 'ios') {
+            if (isStartingIos) return;
+            if (isIosMirroring) {
+                await electron.iosMirrorStop();
+            } else {
+                setIsStartingIos(true);
+                setIsIosMirroring(true);
+                try {
+                    const res = await electron.iosMirrorStart();
+                    if (!res?.success) {
+                        setIsIosMirroring(false);
+                        if (res?.reason === 'no_network') {
+                            addToast('Connect PC to Wi-Fi first — AirPlay requires Wi-Fi', 'error');
+                        } else if (res?.error === 'binary_missing') {
+                            addToast("iOS mirroring isn't set up on this computer. Install the UxPlay helper and try again.", 'error');
+                        } else if (res?.reason === 'already_running') {
+                            setIsIosMirroring(true);
+                        } else {
+                            addToast('Failed to start iOS mirroring', 'error');
+                        }
+                    }
+                } finally {
+                    setIsStartingIos(false);
+                }
+            }
+            return;
+        }
+
         if (isMirroring) {
-            electron.scrcpyStop();
-            setIsMirroring(false);
+            if (isRecording) {
+                await handleRecord();
+            } else {
+                await electron.scrcpyStop();
+                setIsMirroring(false);
+                setSessionSeconds(0);
+            }
         } else {
-            electron.scrcpyStart(selectedDevice, settings);
-            setIsMirroring(true);
+            setSessionSeconds(0);
+            mirrorStartTime.current = Date.now();
+            setIsStarting(true);
+            const res = await electron.scrcpyStart(selectedDevice.id);
+            setIsStarting(false);
+            if (res?.success || res?.reason === 'already_running') {
+                setIsMirroring(true);
+            } else {
+                addToast(res?.message || 'Failed to start mirroring', 'error');
+            }
         }
     };
 
     const handleKeepAwake = async () => {
-        if (!selectedDevice) return;
+        if (!selectedDevice || selectedDevice.kind !== 'android') return;
         const newState = !keepAwake;
-        const success = await electron.adbKeepAwake(selectedDevice, newState);
+        const success = await electron.adbKeepAwake(selectedDevice.id, newState);
         if (success) setKeepAwake(newState);
         else addToast("Failed to toggle Keep Awake", 'error');
     };
 
-    const handleReconnect = () => {
+    const handleRecord = async () => {
         if (!selectedDevice) return;
-        electron.scrcpyStop();
-        setTimeout(() => {
-            electron.scrcpyStart(selectedDevice, settings);
-        }, 500);
-        addToast('Reconnecting mirroring stream', 'success');
+
+        if (selectedDevice.kind === 'ios') {
+            if (!isIosMirroring && !isRecording) return;
+            if (!isRecording) {
+                const result = await electron.iosRecordStart();
+                if (result?.success) {
+                    setIsRecording(true);
+                    setRecordStartTime(Date.now());
+                    addToast('iOS recording started', 'success');
+                } else {
+                    addToast(result?.error || 'Failed to start iOS recording', 'error');
+                }
+            } else {
+                const result = await electron.iosRecordStop();
+                setIsRecording(false);
+                if (result?.filePath) addToast('Recording saved', 'success');
+                else if (result?.cancelled) addToast('Recording discarded', 'success');
+                else addToast(result?.error || 'Failed to stop iOS recording', 'error');
+            }
+            return;
+        }
+
+        if (!isMirroring && !isRecording) return;
+
+        if (!isRecording) {
+            const result = await electron.recordStart(selectedDevice.id);
+            if (result?.cancelled) return;
+            setIsRecording(true);
+            setRecordStartTime(Date.now());
+            addToast('Recording started', 'success');
+        } else {
+            const result = await electron.recordStop(selectedDevice.id);
+            setIsRecording(false);
+            if (result?.filePath) addToast('Recording saved', 'success');
+            else addToast('Recording discarded', 'success');
+        }
     };
 
     const handleScreenshot = async () => {
-        if (!selectedDevice) return;
+        if (!selectedDevice) {
+            console.log('[screenshot] no device selected');
+            addToast('No device selected', 'error');
+            return;
+        }
+        console.log('[screenshot] calling for device:', selectedDevice.kind, selectedDevice.id);
         try {
-            const tempFile = await electron.adbScreenshot(selectedDevice);
-            
-            // Show toast options immediately inside toast state or dialog. 
-            // Better to show a custom prompt in UI or use a system dialog directly.
-            // Requirement 4: "Show a small popup/toast with TWO options"
-            addScreenshotToast(tempFile);
+            if (selectedDevice.kind === 'ios') {
+                const res = await electron.iosScreenshot(selectedDevice.id);
+                if (res?.success) {
+                    addToast('Screenshot captured', 'success');
+                } else {
+                    addToast(res?.error || 'iOS screenshot failed', 'error');
+                }
+                return;
+            }
+            const res = await electron.adbScreenshot(selectedDevice.id);
+            if (res?.success) {
+                addToast('Screenshot captured', 'success');
+            } else {
+                addToast(res?.message || 'Screenshot failed', 'error');
+            }
         } catch (e: any) {
             addToast(e.message, 'error');
         }
     };
 
-    const [screenshotToast, setScreenshotToast] = useState<string | null>(null);
-
-    const addScreenshotToast = (imgPath: string) => {
-        setScreenshotToast(imgPath);
-        setTimeout(() => setScreenshotToast(null), 8000);
-    };
-    
-    const handleScreenshotAction = async (action: 'copy' | 'save', imgPath: string) => {
-        setScreenshotToast(null);
-        if (action === 'copy') {
-            await electron.utilsCopyImageClipboard(imgPath);
-            addToast("Copied to clipboard", 'success');
-        } else {
-            const d = new Date();
-            const dateStr = d.toISOString().replace(/T/, '_').replace(/\..+/, '').replace(/:/g, '-');
-            const defaultPath = await electron.utilsGetPath('pictures') + `\\screenshot_${dateStr}.png`;
-            const savePath = await electron.utilsSaveFileDialog(defaultPath, [{ name: 'Images', extensions: ['png'] }]);
-            if (savePath) {
-                await electron.utilsCopyFile(imgPath, savePath);
-                addToast("Screenshot saved", 'success');
-            }
-        }
+    const formatElapsed = (totalSeconds: number) => {
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+        return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
     };
 
+    const isConnected = !!selectedDevice;
+    const deviceName = selectedDevice?.name || '';
+
+
+    if (isScreenshotPopup) return <ScreenshotPopup />;
 
     return (
-        <div className="flex flex-col h-screen bg-background text-foreground transition-colors overflow-hidden">
-            {/* TOOLBAR */}
-            <header className="h-14 border-b border-border flex items-center px-4 justify-between shrink-0 bg-card">
-                <div className="flex items-center space-x-4">
-                    <div className="flex items-center space-x-2 text-primary font-bold text-lg">
-                        <Monitor className="w-6 h-6" />
-                        <span>MirrorDesk</span>
-                    </div>
+        <div
+            className="h-screen w-full rounded-2xl overflow-hidden bg-[#111114]/95 backdrop-blur-sm border border-white/10 flex flex-col items-center py-2 gap-0.5 select-none cursor-move"
+            style={{ WebkitAppRegion: 'drag', boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 0.5px rgba(255,255,255,0.08)' } as CSSProperties}
+        >
+            {/* App icon / logo */}
+            <div className="w-10 h-10 rounded-xl bg-blue-500 flex items-center justify-center mb-1 flex-shrink-0">
+                <Monitor size={20} className="text-white" />
+            </div>
 
-                    <div className="flex items-center space-x-2">
-                        <select 
-                            className="bg-transparent border border-input rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring text-sm w-48"
-                            value={selectedDevice || ''}
-                            onChange={(e) => setSelectedDevice(e.target.value)}
-                        >
-                            {devices.length === 0 ? (
-                                <option value="">No devices found</option>
-                            ) : (
-                                devices.map(d => (
-                                    <option key={d.id} value={d.id}>{d.model} ({d.id})</option>
-                                ))
-                            )}
-                        </select>
-                        {isMirroring && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
-                                <span className="w-2 h-2 mr-1.5 bg-green-500 rounded-full animate-pulse"></span>
-                                Connected
-                            </span>
-                        )}
-                        {status && (
-                            <div className="flex items-center space-x-3 ml-2 text-sm text-muted-foreground">
-                                <div className="flex items-center space-x-1">
-                                    <Battery className={cn("w-4 h-4", 
-                                        status.battery > 50 ? 'text-green-500' :
-                                        status.battery > 20 ? 'text-amber-500' : 'text-red-500'
-                                    )} />
-                                    <span>{status.battery}%</span>
-                                </div>
-                                <div className="flex items-center space-x-1">
-                                    {status.isWifi ? <Wifi className="w-4 h-4 text-blue-500"/> : <Usb className="w-4 h-4 text-gray-500"/>}
-                                    <span>{status.isWifi ? 'Wi-Fi' : 'USB'}</span>
-                                </div>
-                                {status.ip && (
-                                    <div className="flex items-center space-x-1 px-2 py-1 rounded-md bg-background/80 border border-border">
-                                        <span className="text-xs font-medium">IP:</span>
-                                        <span className="text-xs">{status.ip}</span>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                </div>
+            {/* Divider */}
+            <div className="w-8 h-px bg-white/10 mb-0.5" />
 
-                <div className="flex items-center space-x-2">
-                    <button 
-                        onClick={handleScreenshot}
-                        disabled={!selectedDevice}
-                        className="p-2 hover:bg-accent hover:text-accent-foreground rounded-md disabled:opacity-50 flex items-center space-x-2 text-sm font-medium transition-colors"
-                    >
-                        <Camera className="w-4 h-4" />
-                        <span>Screenshot</span>
-                    </button>
-                    <button 
-                        onClick={handleKeepAwake}
-                        disabled={!selectedDevice}
-                        className={cn(
-                            "p-2 rounded-md disabled:opacity-50 flex items-center space-x-2 text-sm font-medium transition-colors",
-                            keepAwake ? 'text-green-500 bg-green-100/50 dark:bg-green-950' : 'hover:bg-accent hover:text-accent-foreground'
-                        )}
-                    >
-                        <Sun className="w-4 h-4" />
-                        <span>Keep Awake</span>
-                    </button>
-                    <div className="w-px h-6 bg-border mx-1"></div>
-                    <button onClick={toggleTheme} className="p-2 hover:bg-accent rounded-md">
-                        {theme === 'dark' ? <Moon className="w-4 h-4"/> : <Sun className="w-4 h-4"/>}
-                    </button>
-                    <button 
-                        onClick={() => setShowSettings(!showSettings)}
-                        className={cn("p-2 rounded-md transition-colors", showSettings ? 'bg-primary text-primary-foreground' : 'hover:bg-accent')}
-                    >
-                        <Settings className="w-4 h-4" />
-                    </button>
-                </div>
-            </header>
-
-            {/* MAIN CONTENT */}
-            <main className="flex-1 flex overflow-hidden relative">
-                <div className="flex-1 p-8 overflow-y-auto">
-                    {!selectedDevice ? (
-                        <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center space-y-6">
-                            <div className="w-24 h-24 bg-accent/50 rounded-full flex items-center justify-center">
-                                <Smartphone className="w-12 h-12 text-primary" />
-                            </div>
-                            <h2 className="text-2xl font-bold tracking-tight">No Device Found</h2>
-                            <p className="text-muted-foreground">
-                                Please enable USB Debugging on your Android device and plug it in, or connect via Wi-Fi.
-                            </p>
-                            <button 
-                                onClick={() => setShowWifiConnect(true)}
-                                className="inline-flex items-center justify-center px-4 py-2 border border-input rounded-md font-medium hover:bg-accent"
-                            >
-                                <Wifi className="w-4 h-4 mr-2" /> Connect via Wi-Fi
-                            </button>
-                        </div>
-                    ) : (
-                        <div className="flex flex-col h-full max-w-4xl mx-auto space-y-8 w-full p-4">
-                            <div ref={containerRef} className="p-0 rounded-xl bg-card border shadow-sm flex flex-col items-center justify-center flex-1 relative overflow-hidden h-full w-full">
-                                {!isMirroring ? (
-                                    <div className="flex flex-col items-center">
-                                        <Monitor className="w-16 h-16 text-muted-foreground mb-4" />
-                                        <h3 className="text-xl font-semibold mb-2">Ready to Mirror</h3>
-                                        <p className="text-muted-foreground mb-8 text-center max-w-sm">
-                                            Connect your {status?.model || 'Android device'} natively via WebCodecs.
-                                        </p>
-                                        <button 
-                                            onClick={toggleMirror}
-                                            className="inline-flex items-center justify-center px-8 py-3 rounded-md font-medium shadow-sm transition-all text-white bg-primary hover:bg-primary/90"
-                                        >
-                                            <Play className="w-5 h-5 mr-3" />
-                                            Start Mirroring
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <>
-                                                <MirrorView deviceId={selectedDevice} />
-                                        <div className="absolute top-4 right-4 z-50 w-80 p-3 space-y-3 rounded-2xl bg-slate-950/80 border border-white/10 text-xs text-white shadow-2xl">
-                                            <div className="flex items-center justify-between gap-2">
-                                                <span className="font-semibold">Stream Debug</span>
-                                                <button
-                                                    onClick={handleReconnect}
-                                                    className="px-2 py-1 rounded-md bg-slate-700/90 hover:bg-slate-600"
-                                                >Reconnect</button>
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-2">
-                                                <div className="rounded-lg bg-slate-900/90 p-2 border border-white/10">
-                                                    <div className="text-[10px] uppercase text-slate-400">Connection</div>
-                                                    <div className="mt-1 text-sm">{status?.isWifi ? 'Wi-Fi' : 'USB'}</div>
-                                                    <div className="mt-1 text-slate-400">{status?.ip || 'No IP'}</div>
-                                                </div>
-                                                <div className="rounded-lg bg-slate-900/90 p-2 border border-white/10">
-                                                    <div className="text-[10px] uppercase text-slate-400">Device</div>
-                                                    <div className="mt-1 text-sm">{status?.model || 'Unknown'}</div>
-                                                    <div className="mt-1 text-slate-400">{status?.battery}% battery</div>
-                                                </div>
-                                            </div>
-                                            <div className="max-h-36 overflow-y-auto rounded-lg bg-slate-900/90 p-2 border border-white/10 text-[11px] leading-tight">
-                                                {debugLogs.length === 0 ? (
-                                                    <div className="text-slate-500">No debug messages yet.</div>
-                                                ) : (
-                                                    debugLogs.map((log, index) => (
-                                                        <div key={`${log}-${index}`} className="mb-1 border-b border-white/5 pb-1 last:border-b-0 last:mb-0">{log}</div>
-                                                    ))
-                                                )}
-                                            </div>
-                                        </div>
-                                        <button 
-                                            onClick={toggleMirror}
-                                            className="absolute bottom-4 left-4 z-50 inline-flex items-center justify-center px-4 py-2 rounded-md font-medium shadow-lg transition-all text-white bg-destructive hover:bg-destructive/90 text-sm"
-                                        >
-                                            <div className="w-4 h-4 mr-2 rounded-sm border-2 border-current flex items-center justify-center"><div className="w-2 h-2 bg-current rounded-sm"></div></div> Stop Mirroring
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                        </div>
+            {/* Device status dot */}
+            <div className="relative group">
+                <div className={`w-2.5 h-2.5 rounded-full mx-auto mb-2 ${isConnected ? 'bg-green-400' : 'bg-white/20'}`} />
+                <div className="absolute left-14 top-0 bg-[#1f1f26] border border-white/10 rounded-lg px-3 py-2 text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity">
+                    {deviceName || 'No device'}
+                    <br />
+                    {isConnected && (
+                        selectedDevice?.kind === 'ios'
+                            ? 'iOS Device'
+                            : `${status?.battery ?? 0}% · ${status?.isWifi ? 'Wi-Fi' : 'USB'}`
                     )}
                 </div>
+            </div>
 
-                {/* SETTINGS PANEL */}
-                {showSettings && (
-                    <div className="w-80 border-l border-border bg-card p-6 overflow-y-auto shadow-xl">
-                        <h3 className="font-semibold text-lg mb-6 flex items-center"><Settings className="w-4 h-4 mr-2"/> Settings</h3>
-                        
-                        <div className="space-y-6">
-                            <div className="space-y-3">
-                                <label className="text-sm font-medium">Resolution</label>
-                                <select 
-                                    className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                                    value={settings.maxSize || 0}
-                                    onChange={(e) => saveSettings({ ...settings, maxSize: Number(e.target.value) || undefined })}
-                                >
-                                    <option value={0}>Original</option>
-                                    <option value={1440}>1440p</option>
-                                    <option value={1080}>1080p</option>
-                                    <option value={720}>720p</option>
-                                    <option value={480}>480p</option>
-                                </select>
-                            </div>
+            {/* START / STOP MIRROR — primary action */}
+            <IconButton
+                onClick={toggleMirror}
+                icon={isMirroring || isIosMirroring ? Square : Play}
+                tooltip={
+                    selectedDevice?.kind === 'ios'
+                        ? (isIosMirroring ? `Stop iOS Mirror (${formatElapsed(sessionSeconds)})` : 'Start iOS Mirror')
+                        : (isMirroring ? `Stop Mirroring (${formatElapsed(sessionSeconds)})` : 'Start Mirroring')
+                }
+                active={isMirroring || isIosMirroring}
+                activeColor="red"
+                disabled={isStarting || isStartingIos}
+                size="lg"
+            />
 
-                            <div className="space-y-3">
-                                <label className="text-sm font-medium">Video Bitrate</label>
-                                <select 
-                                    className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                                    value={settings.videoBitrate || ''}
-                                    onChange={(e) => saveSettings({ ...settings, videoBitrate: e.target.value || undefined })}
-                                >
-                                    <option value="">Default</option>
-                                    <option value="16M">Ultra (16 Mbps)</option>
-                                    <option value="8M">High (8 Mbps)</option>
-                                    <option value="4M">Medium (4 Mbps)</option>
-                                    <option value="2M">Low (2 Mbps)</option>
-                                </select>
-                            </div>
+            {selectedDevice?.kind === 'ios' && isIosMirroring && iosConnectionStatus && (
+                <div className="text-[10px] text-white/50 text-center mb-1">
+                    {iosConnectionStatus === 'waiting' && 'Waiting for iPhone...'}
+                    {iosConnectionStatus === 'connected' && 'iPhone connected ✓'}
+                    {iosConnectionStatus === 'disconnected' && 'iPhone disconnected'}
+                </div>
+            )}
 
-                            <div className="space-y-3">
-                                <label className="text-sm font-medium">Frame Rate</label>
-                                <select 
-                                    className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                                    value={settings.maxFps || 0}
-                                    onChange={(e) => saveSettings({ ...settings, maxFps: Number(e.target.value) || undefined })}
-                                >
-                                    <option value={0}>Default</option>
-                                    <option value={120}>120 FPS</option>
-                                    <option value={60}>60 FPS</option>
-                                    <option value={30}>30 FPS</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                )}
-            </main>
+            {/* Divider */}
+            <div className="w-8 h-px bg-white/10 my-1" />
+
+            {/* SCREENSHOT */}
+            <IconButton
+                onClick={handleScreenshot}
+                icon={Camera}
+                tooltip="Screenshot"
+                disabled={!selectedDevice}
+            />
+
+            {/* RECORD — via scrcpy --record */}
+            <IconButton
+                onClick={handleRecord}
+                icon={Circle}
+                tooltip={isRecording ? `Stop Recording ${formatElapsed(recordElapsed)}` : 'Record'}
+                active={isRecording}
+                activeColor="red"
+                disabled={!isMirroring && !(selectedDevice?.kind === 'ios' && isIosMirroring)}
+            />
+
+            {/* KEEP AWAKE */}
+            <IconButton
+                onClick={handleKeepAwake}
+                icon={Sun}
+                tooltip={keepAwake ? 'Keep Awake: ON' : 'Keep Awake: OFF'}
+                active={keepAwake}
+                activeColor="amber"
+                disabled={!selectedDevice || selectedDevice.kind !== 'android'}
+            />
+
+            {/* Spacer — pushes bottom controls down */}
+            <div className="flex-1" />
+
+            {/* PIN TO TOP */}
+            <IconButton
+                onClick={toggleAlwaysOnTop}
+                icon={alwaysOnTop ? Pin : PinOff}
+                tooltip={alwaysOnTop ? 'Pinned on top' : 'Click to pin on top'}
+                active={alwaysOnTop}
+                activeColor="blue"
+            />
+
+            {/* MORE OPTIONS */}
+            <IconButton
+                onClick={() => electron.showContextMenu({ theme, alwaysOnTop })}
+                icon={MoreVertical}
+                tooltip="More options"
+            />
+
+            {/* CLOSE */}
+            <IconButton
+                onClick={() => electron.closeWindow()}
+                icon={X}
+                tooltip="Close Mirra"
+                size="sm"
+            />
 
             {/* MODALS & TOASTS */}
             {showWifiConnect && (
-                <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                    <div className="bg-card border shadow-lg rounded-xl max-w-sm w-full p-6">
-                        <h3 className="text-lg font-semibold mb-2">Connect via Wi-Fi</h3>
-                        <p className="text-sm text-muted-foreground mb-6">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/60">
+                    <div className="bg-[#1a1a1f] border border-white/10 shadow-lg rounded-xl w-full max-w-[260px] p-5">
+                        <h3 className="text-base font-semibold mb-2 text-white">Connect via Wi-Fi</h3>
+                        <p className="text-xs text-white/50 mb-4">
                             Make sure your phone and PC are on the same Wi-Fi network. 
                             Enable "Wireless debugging" on your Android 11+ device and enter the IP and port below.
                         </p>
                         <input 
                             type="text" 
                             placeholder="e.g. 192.168.1.5:5555"
-                            className="w-full bg-background border border-input rounded-md px-4 py-2 text-sm mb-4"
+                            style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                            className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm text-white mb-4 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             value={wifiIp}
                             onChange={(e) => setWifiIp(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleConnectWifi()}
                         />
-                                <div className="space-y-3">
+                        <div className="space-y-2">
                             <button
-                                className="w-full px-4 py-2 rounded-md bg-slate-800 text-slate-100 hover:bg-slate-700"
+                                style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                                className="w-full px-4 py-2 rounded-md bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 text-sm"
                                 disabled={!selectedDevice || autoDiscoverInProgress}
                                 onClick={handleDiscoverIp}
                             >
                                 {autoDiscoverInProgress ? 'Discovering IP…' : 'Auto discover device IP'}
                             </button>
                             <button
-                                className="w-full px-4 py-2 rounded-md bg-slate-800 text-slate-100 hover:bg-slate-700"
+                                style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                                className="w-full px-4 py-2 rounded-md bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 text-sm"
                                 disabled={!selectedDevice}
                                 onClick={handleEnableWifi}
                             >Enable Wireless Debugging (adb tcpip 5555)</button>
                         </div>
-                        <div className="flex justify-end space-x-2 mt-2">
-                            <button className="px-4 py-2 text-sm rounded-md hover:bg-accent" onClick={() => setShowWifiConnect(false)}>Cancel</button>
-                            <button className="px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground font-medium" onClick={handleConnectWifi}>Connect</button>
+                        <div className="flex justify-end space-x-2 mt-4">
+                            <button style={{ WebkitAppRegion: 'no-drag' } as CSSProperties} className="px-3 py-1.5 text-sm rounded-md text-white/60 hover:bg-white/10" onClick={() => setShowWifiConnect(false)}>Cancel</button>
+                            <button style={{ WebkitAppRegion: 'no-drag' } as CSSProperties} className="px-3 py-1.5 text-sm rounded-md bg-blue-500 text-white font-medium hover:bg-blue-600" onClick={handleConnectWifi}>Connect</button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {screenshotToast && (
-                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 p-4 bg-card border rounded-xl shadow-xl z-50 flex flex-col items-center space-y-4 w-72 animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex items-center space-x-2 text-sm font-medium">
-                        <Camera className="w-5 h-5 text-primary" />
-                        <span>Screenshot captured!</span>
-                    </div>
-                    <div className="flex space-x-2 w-full">
-                        <button onClick={() => handleScreenshotAction('copy', screenshotToast)} className="flex-1 py-1.5 px-3 bg-accent hover:bg-accent/80 rounded border text-xs font-medium">Copy Image</button>
-                        <button onClick={() => handleScreenshotAction('save', screenshotToast)} className="flex-1 py-1.5 px-3 bg-primary text-primary-foreground hover:bg-primary/90 rounded text-xs font-medium">Save As...</button>
-                    </div>
+            {driversMissing && (
+                <div className="fixed left-[72px] top-2 z-40 w-[280px] flex items-start flex-wrap gap-2 px-3 py-2.5 rounded-lg shadow-lg border border-blue-500/30 bg-blue-50 text-blue-900 dark:bg-blue-950/90 dark:text-blue-100 text-xs">
+                    <span className="flex-1 min-w-0">No iOS devices found. Install the <span className="font-medium">Apple Devices</span> app from the Microsoft Store to enable iOS support.</span>
+                    <button
+                        onClick={() => electron.iosOpenStore()}
+                        style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                        className="shrink-0 px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 whitespace-nowrap"
+                    >
+                        Open Microsoft Store
+                    </button>
+                    <button
+                        onClick={() => {
+                            driversBannerDismissedRef.current = true;
+                            setDriversMissing(false);
+                        }}
+                        aria-label="Dismiss"
+                        style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                        className="shrink-0 text-blue-900/60 hover:text-blue-900 dark:text-blue-100/60 dark:hover:text-blue-100"
+                    >
+                        <X className="w-4 h-4" />
+                    </button>
                 </div>
             )}
 
-            <div className="absolute bottom-6 right-6 flex flex-col space-y-2 z-40">
+            <div className="fixed left-[72px] bottom-2 z-40 w-[260px] flex flex-col space-y-2">
                 {toasts.map(toast => (
                     <div key={toast.id} className={cn(
                         "px-4 py-3 rounded-lg shadow-lg border text-sm flex items-center space-x-3 transition-opacity duration-300",
-                        toast.type === 'success' ? 'bg-card border-green-500/20 text-foreground' : 'bg-destructive text-destructive-foreground'
+                        toast.type === 'success' ? 'bg-[#1a1a1f] border-green-500/20 text-white/90'
+                            : toast.type === 'info' ? 'bg-[#1a1a1f] border-blue-500/30 text-white/90'
+                            : 'bg-[#2a1215] border-red-500/30 text-red-100'
                     )}>
-                        {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <div className="w-4 h-4" />}
-                        <span>{toast.msg}</span>
+                        {toast.type === 'success'
+                            ? <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                            : toast.type === 'info'
+                                ? <Info className="w-4 h-4 text-blue-400 shrink-0" />
+                                : <div className="w-4 h-4 shrink-0" />
+                        }
+                        <span className="whitespace-pre-line">{toast.msg}</span>
+                        {toast.action && (
+                            <button
+                                onClick={() => toast.action!.onClick()}
+                                style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                                className={cn(
+                                    "ml-1 px-2 py-1 rounded text-xs font-medium whitespace-nowrap",
+                                    toast.type === 'success' ? "bg-blue-500 text-white hover:bg-blue-600" : "bg-white/20 hover:bg-white/30"
+                                )}
+                            >
+                                {toast.action.label}
+                            </button>
+                        )}
                     </div>
                 ))}
             </div>
         </div>
     );
 }
+
+const ScreenshotPopup = () => {
+    const [imgSrc, setImgSrc] = useState<string | null>(null);
+
+    useEffect(() => {
+        console.log('[popup] mounted, hash =', window.location.hash);
+        // Listen for data pushed from main (fast path)
+        electron.onScreenshotDataPush((data: { base64: string; tempPath: string }) => {
+            console.log('[popup] received push, base64 len =', data.base64.length);
+            setImgSrc(`data:image/png;base64,${data.base64}`);
+        });
+
+        // Fallback: pull if push hasn't arrived within 500ms
+        const fallbackTimer = setTimeout(async () => {
+            console.log('[popup] fallback firing (no push within 500ms)');
+            const res: any = await electron.screenshotGetData();
+            console.log('[popup] fallback get-data result:', res?.success);
+            if (res?.success) {
+                setImgSrc(prev => prev ?? `data:image/png;base64,${res.base64}`);
+            }
+        }, 500);
+
+        // Auto-dismiss after 10 seconds
+        const dismissTimer = setTimeout(() => {
+            electron.screenshotDismiss();
+        }, 10000);
+
+        // Escape key
+        const keyHandler = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') electron.screenshotDismiss();
+        };
+        window.addEventListener('keydown', keyHandler);
+
+        return () => {
+            clearTimeout(fallbackTimer);
+            clearTimeout(dismissTimer);
+            window.removeEventListener('keydown', keyHandler);
+        };
+    }, []);
+
+    return (
+        <div
+            style={{ WebkitAppRegion: 'drag', boxShadow: '0 12px 40px rgba(0,0,0,0.7)' } as CSSProperties}
+            className="h-screen w-full rounded-2xl overflow-hidden bg-[#1a1a22]/95 backdrop-blur-sm border border-white/10 flex flex-col p-3"
+        >
+            <div className="flex items-center justify-between mb-2" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}>
+                <div className="flex items-center gap-2">
+                    <Camera size={14} className="text-blue-400" />
+                    <span className="text-[12px] text-white font-medium">Screenshot captured</span>
+                </div>
+                <button
+                    onClick={() => electron.screenshotDismiss()}
+                    style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                    className="w-5 h-5 rounded flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/10"
+                >
+                    <X size={12} />
+                </button>
+            </div>
+            {imgSrc ? (
+                <div className="flex-1 rounded-lg overflow-hidden bg-black/40 mb-2 flex items-center justify-center">
+                    <img src={imgSrc} alt="Screenshot" className="max-h-full max-w-full object-contain" />
+                </div>
+            ) : (
+                <div className="flex-1 rounded-lg bg-white/5 mb-2 animate-pulse flex items-center justify-center">
+                    <span className="text-white/20 text-xs">Loading...</span>
+                </div>
+            )}
+            <div className="flex gap-2" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}>
+                <button
+                    onClick={() => electron.screenshotCopyClipboard()}
+                    style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                    className="flex-1 py-1.5 rounded-lg bg-white/10 border border-white/10 text-[11px] text-white/70 hover:bg-white/15 transition-all"
+                >
+                    Copy Image
+                </button>
+                <button
+                    onClick={() => electron.screenshotSave()}
+                    style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+                    className="flex-1 py-1.5 rounded-lg bg-blue-500 text-[11px] text-white font-medium hover:bg-blue-600 transition-all"
+                >
+                    Save As…
+                </button>
+            </div>
+            <div className="mt-2 h-0.5 bg-white/10 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-400/50 rounded-full animate-[shrink_10s_linear_forwards]" />
+            </div>
+        </div>
+    );
+};
+
+interface IconButtonProps {
+    icon: LucideIcon;
+    tooltip: string;
+    onClick?: () => void;
+    active?: boolean;
+    activeColor?: 'red' | 'amber' | 'blue' | 'green';
+    disabled?: boolean;
+    size?: 'sm' | 'md' | 'lg';
+}
+
+const colorMap: Record<NonNullable<IconButtonProps['activeColor']>, string> = {
+    red: 'bg-red-500/15 text-red-400 border-red-500/30',
+    amber: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+    blue: 'bg-blue-500/20 text-blue-400 border-blue-500/35',
+    green: 'bg-green-500/15 text-green-400 border-green-500/30',
+};
+
+const sizeMap: Record<NonNullable<IconButtonProps['size']>, { btn: string; icon: number }> = {
+    sm: { btn: 'w-9 h-9', icon: 14 },
+    md: { btn: 'w-10 h-10', icon: 18 },
+    lg: { btn: 'w-11 h-11', icon: 20 },
+};
+
+const IconButton = ({ icon: Icon, tooltip, onClick, active, activeColor = 'blue', disabled, size = 'md' }: IconButtonProps) => (
+    <div className="relative group">
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+            className={`
+                ${sizeMap[size].btn} rounded-xl border flex items-center justify-center transition-all duration-150
+                ${active
+                    ? colorMap[activeColor]
+                    : 'border-white/10 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80'
+                }
+                ${disabled ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}
+            `}
+        >
+            <Icon size={sizeMap[size].icon} />
+        </button>
+        <div className="absolute left-14 top-1/2 -translate-y-1/2 bg-[#1f1f26] border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity duration-150">
+            {tooltip}
+        </div>
+    </div>
+);
 
 export default App;

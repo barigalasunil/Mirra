@@ -1,18 +1,41 @@
-appId: com.mirrordesk.app
-productName: MirrorDesk
+appId: com.mirra.app
+productName: Mirra
+copyright: "Copyright © 2026 Mirra"
+
 directories:
   output: release
+
 files:
   - dist-main/**/*
   - dist/**/*
   - package.json
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: resources/scrcpy/icon.png
+  artifactName: "Mirra-Setup-${version}.exe"
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Mirra
+
+portable:
+  artifactName: "Mirra-portable-${version}.exe"
+
 extraResources:
   - from: resources/scrcpy
     to: scrcpy
-win:
-  target: nsis
-  icon: resources/icon.ico
-nsis:
-  oneClick: false
-  perMachine: false
-  allowToChangeInstallationDirectory: true
+  - from: resources/ios
+    to: ios
+
+asarUnpack:
+  - "**/*.node"
+  - "resources/**"
