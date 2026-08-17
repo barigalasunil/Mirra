@@ -1,208 +1,112 @@
 # Mirra
 
-> **Android & iOS screen mirroring for Windows** — lightweight,
-> open-source, and free.
+> Lightweight screen mirroring for Android & iOS — free, open-source, no bloat.
 
-Mirra is a floating toolbar that sits beside your phone's mirrored
-screen, giving you one-click screenshot, screen recording, and
-device controls — without the bloat of commercial tools like Vysor.
+Mirra is a tiny floating toolbar that lives beside your phone's mirrored screen. One click to screenshot, one click to record, zero clutter.
+
+Built on [scrcpy](https://github.com/Genymobile/scrcpy) (Android) and AirPlay (iOS).
 
 ---
 
 ## Features
 
-| Feature | Android | iOS |
-|---------|---------|-----|
-| Screen Mirroring | via scrcpy | via AirPlay (UxPlay) |
-| Screenshot | Copy or Save | Copy or Save |
-| Screen Recording | MP4 | Coming soon |
-| Keep Screen Awake | Yes | — |
-| Wi-Fi Connect | Yes | Same network |
-| Always-on-top toolbar | Yes | Yes |
+| | Android | iOS |
+|---|---|---|
+| **Mirror screen** | USB / Wi-Fi | AirPlay (same Wi-Fi) |
+| **Screenshot** | Copy or Save | Copy or Save |
+| **Screen recording** | MP4, H.264 | Work in progress |
+| **Keep screen awake** | Yes | — |
+| **Always-on-top toolbar** | Yes | Yes |
 
 ---
 
-## Requirements
+## Quick start
 
-**Windows 10/11 (64-bit)**
+### Download
 
-### For Android
-- USB cable + USB Debugging enabled on your Android device
-- Android 5.0+ (API 21+)
+Grab `Mirra-portable.exe` from [Releases](../../releases) — no install needed, just run it.
 
-### For iOS
-- iPhone and PC on the **same Wi-Fi network**
-- iTunes installed (for USB drivers) — get it from Microsoft Store
-- iOS 12 or later
+### Android
 
----
+1. Enable **USB Debugging** on your phone (Settings > Developer Options)
+2. Plug in via USB, tap "Allow" on the prompt
+3. Mirra detects your device automatically — click **Start Mirroring**
 
-## Quick Start
+> Don't see Developer Options? Go to Settings > About Phone > tap **Build Number** 7 times.
 
-### Option A — Portable (no install)
-1. Download `Mirra-portable.exe` from [Releases](../../releases)
-2. Double-click to run — no installation needed
-3. Plug in your Android device via USB
+### iOS
 
-### Option B — Installer
-1. Download `Mirra-Setup.exe` from [Releases](../../releases)
-2. Run the installer, follow the steps
-3. Launch Mirra from the Start Menu or Desktop shortcut
+1. Connect your iPhone and PC to the **same Wi-Fi network**
+2. Click **Start iOS Mirror** in Mirra
+3. On iPhone: **Control Center > Screen Mirroring > Mirra**
 
----
-
-## Android Setup
-
-1. On your Android phone, go to **Settings > Developer Options**
-2. Enable **USB Debugging**
-3. Connect phone to PC via USB cable
-4. Tap **"Allow"** on the USB Debugging prompt on your phone
-5. Open Mirra — your device will appear automatically
-6. Click **Start Mirroring**
-
-> **Don't see Developer Options?**
-> Go to Settings > About Phone > tap **Build Number** 7 times.
-
----
-
-## iOS Setup (AirPlay Mirroring)
-
-iOS mirroring works over Wi-Fi using Apple's AirPlay protocol.
-No jailbreak or app install needed.
-
-1. Make sure your iPhone and PC are on the **same Wi-Fi network**
-2. Open Mirra and click **Start iOS Mirror**
-3. On your iPhone, open **Control Center**
-   (swipe down from top-right corner)
-4. Tap **Screen Mirroring**
-5. Select **"Mirra"** from the list
-6. Your iPhone screen will appear in a new window
-
-> **"Mirra" not appearing in the list?**
-> - Check both devices are on the same Wi-Fi (not one on 2.4GHz,
->   one on 5GHz if your router isolates them)
-> - Allow Mirra through Windows Firewall when prompted
-> - Try toggling Wi-Fi off/on on your iPhone
+> If "Mirra" doesn't appear, allow it through Windows Firewall when prompted.
 
 ---
 
 ## Screenshot
 
-Click the **camera icon** in the toolbar.
-A popup will appear on the mirrored screen with two options:
-- **Copy Image** — copies to clipboard (paste in any app)
-- **Save As...** — opens a save dialog (saves as PNG to your Pictures)
+Click the **camera icon** in the toolbar. A popup appears on the mirrored screen:
+
+- **Copy Image** — straight to clipboard, paste anywhere
+- **Save As...** — pick a location, saves as PNG
+
+Works for both Android and iOS.
 
 ---
 
 ## Screen Recording (Android)
 
-1. Click the **record icon** — a save dialog appears first
-2. Choose where to save the MP4 file
-3. Mirroring continues while recording
-4. Click **stop icon** to end — file is saved and folder opens
+1. Click the **record icon**
+2. Pick where to save the MP4
+3. Record as long as you want — mirroring continues
+4. Click **stop** — file saves and folder opens
 
-> Recording saves as MP4 with H.264 video at 8 Mbps quality.
-
----
-
-## Settings (via menu)
-
-- **Connect via Wi-Fi** — connect Android wirelessly (same network)
-- **Light/Dark Mode** — toggle app theme
-- **Pin to Top** — keep toolbar above all windows
-- **Developer Tools** — opens Chromium DevTools (separate window)
+iOS recording is coming soon.
 
 ---
 
-## Known Limitations
+## Settings
 
-- **Initial launch takes 3-8 seconds** — Mirra starts a local
-  development server on first run. This is a known limitation of
-  the current build and will be improved in a future release.
-  The app is fully functional once the toolbar icons appear.
+Open the **3-dot menu** at the bottom of the toolbar:
 
-- **iOS recording not yet supported** — AirPlay streaming is
-  receive-only in UxPlay. Recording will be added in a future version.
-
-- **iOS window size** — The mirrored iOS window opens at a fixed
-  390x844 resolution. Resize it manually if needed.
-
-- **scrcpy port warning** — You may see a Windows Firewall popup
-  on first launch. Click "Allow" to enable device communication.
+- **Connect via Wi-Fi** — go wireless with your Android device
+- **Dark / Light Mode** — switch themes
+- **Pin to Top** — keep the toolbar above all windows
 
 ---
 
-## Build from Source
+## Requirements
+
+**Windows 10 / 11 (64-bit)**
+
+| | Android | iOS |
+|---|---|---|
+| Connection | USB cable (or Wi-Fi) | Same Wi-Fi network |
+| Phone | Android 5.0+ with USB Debugging | iOS 12+ |
+| PC software | Nothing extra — bundled | iTunes or Apple Devices app (for USB drivers) |
+
+---
+
+## Build from source
 
 ```bash
-# Clone the repo
-git clone https://github.com/YOUR_USERNAME/mirra.git
-cd mirra
-
-# Install dependencies
-npm run install-app
-
-# Run in development mode (requires Android device connected)
+git clone https://github.com/barigalasunil/Mirra.git
+cd Mirra
+npm install
 npm run dev
-
-# Build Windows installer + portable exe
-npm run build
 ```
 
-> **Note:** Run all commands from the repo root.
-> The Electron app lives in `mirrordesk/` — the root `package.json`
-> has convenience scripts that cd into it automatically.
-
-### Prerequisites for building
-- Node.js 18+
-- npm 9+
-- Git
-
-### What gets built
-After `npm run build`:
-- `mirrordesk/release/Mirra Setup 0.1.0.exe` — NSIS installer
-- `mirrordesk/release/Mirra 0.1.0.exe` — Portable executable
+Requires Node.js 18+.
 
 ---
 
-## Project Structure
+## License
 
-```
-mirra/
-  mirrordesk/          <- Electron app (main project)
-    src/
-      main/            <- Electron main process
-        main.ts            <- App entry, IPC handlers
-        ios-utils.ts       <- iOS device detection
-        scrcpyWindow.ts    <- Mirror window tracker
-      renderer/        <- React UI
-        App.tsx            <- Toolbar + all UI
-      shared/          <- Shared TypeScript types
-    resources/
-      scrcpy/          <- Bundled scrcpy 2.4 + adb (Windows)
-      ios/             <- UxPlay + pymobiledevice3
-    electron-builder.yml
-  package.json         <- Root convenience scripts
-  README.md
-```
+Apache 2.0 — see [LICENSE](LICENSE).
 
 ---
 
-## License & Credits
+## Credits
 
-Mirra is built on top of these amazing open-source projects:
-
-| Project | License | Used for |
-|---------|---------|----------|
-| [scrcpy](https://github.com/Genymobile/scrcpy) | Apache 2.0 | Android mirroring |
-| [UxPlay](https://github.com/FDH2/UxPlay) | GPL 3.0 | iOS AirPlay receiver |
-| [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) | GPL 3.0 | iOS device detection |
-| [Electron](https://www.electronjs.org) | MIT | Desktop app framework |
-| [React](https://react.dev) | MIT | UI |
-
----
-
-## Contributing
-
-PRs welcome! Please open an issue first to discuss major changes.
+Mirra stands on the shoulders of [scrcpy](https://github.com/Genymobile/scrcpy), [UxPlay](https://github.com/FDH2/UxPlay), and the [Electron](https://www.electronjs.org) ecosystem. Thank you to all the maintainers.

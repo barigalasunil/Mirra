@@ -14,6 +14,10 @@ import {
     startTracking,
     stopTracking,
     raiseProcessWindows,
+    startIosTracking,
+    stopIosTracking,
+    getIosMirrorRect,
+    refreshIosMirrorRect,
 } from './scrcpyWindow';
 const store: any = new Store();
 const isDev = process.env.NODE_ENV === 'development';
@@ -23,8 +27,10 @@ let screenshotPopupWindow: BrowserWindow | null = null;
 let pendingScreenshotPath: string | null = null;
 let pendingScreenshotBase64: string | null = null;
 let recordingFilePath: string | null = null;
-let uxplayProcess: ReturnType<typeof spawn> | null = null;const suppressedProcs = new Set<any>();
+let uxplayProcess: ReturnType<typeof spawn> | null = null;
+const suppressedProcs = new Set<any>();
 let ipcInitialized = false;
+let uxplayRaiseTimer: ReturnType<typeof setInterval> | null = null;
 
 const ts = () => {
     const d = new Date();
@@ -150,7 +156,16 @@ app.on('window-all-closed', () => {
     }
 });
 
+function clearUxplayRaiseTimer(): void {
+    if (uxplayRaiseTimer) {
+        clearInterval(uxplayRaiseTimer);
+        uxplayRaiseTimer = null;
+    }
+}
+
 app.on('before-quit', () => {
+    clearUxplayRaiseTimer();
+    stopIosTracking();
     if (scrcpyProcess) {
         scrcpyProcess.kill();
         scrcpyProcess = null;
@@ -275,8 +290,13 @@ function showScreenshotPopup(base64Image: string, tempPath: string): void {
     const popupH = 200;
     let popupX = 0;
     let popupY = 0;
+    // Try Android mirror rect first, then iOS mirror rect
     refreshMirrorRect();
-    const rect = getMirrorRect();
+    let rect = getMirrorRect();
+    if (!rect) {
+        refreshIosMirrorRect();
+        rect = getIosMirrorRect();
+    }
     console.log('[screenshot] mirror rect:', JSON.stringify(rect));
     if (rect) {
         // GetWindowRect returns physical pixels; BrowserWindow x/y use DIPs.
@@ -721,6 +741,8 @@ function getUxplayPath(): string {
 }
 
 function killUxplay(): void {
+    clearUxplayRaiseTimer();
+    stopIosTracking();
     if (uxplayProcess && !uxplayProcess.killed) {
         uxplayProcess.kill();
     }
@@ -728,6 +750,8 @@ function killUxplay(): void {
 }
 
 async function killUxplayWithWait(): Promise<void> {
+    clearUxplayRaiseTimer();
+    stopIosTracking();
     if (uxplayProcess && !uxplayProcess.killed) {
         uxplayProcess.kill();
         uxplayProcess = null;
@@ -776,6 +800,29 @@ function spawnUxplay(mp4Base?: string): void {
     uxplayProcess = proc;
     console.log('[ios-mirror] uxplay spawned, args:', args.join(' '));
 
+    // Immediately start trying to raise UxPlay's video window. The GStreamer
+    // window may appear before or after stdout emits specific patterns, so we
+    // raise proactively on a timer instead of waiting for a regex match.
+    clearUxplayRaiseTimer();
+    let raiseAttempts = 0;
+    const pid = proc.pid;
+    if (pid) {
+        console.log('[ios-mirror] starting periodic raiseProcessWindows for pid', pid);
+        uxplayRaiseTimer = setInterval(() => {
+            const raised = raiseProcessWindows(pid);
+            if (raised > 0) {
+                console.log('[ios-mirror] raiseProcessWindows found', raised, 'window(s)');
+            }
+            if (++raiseAttempts > 30) {
+                clearUxplayRaiseTimer();
+            }
+        }, 1000);
+    }
+
+    // Also start tracking the UxPlay window by title ("Mirra") so that
+    // getMirrorRect / refreshMirrorRect work for screenshot popup positioning.
+    startIosTracking();
+
     const handleSinkFallback = (source: string) => {
         if (uxplaySinkIndex < UXPLAY_SINKS.length - 1) {
             mainWindow?.webContents.send('ios:mirror-error', { detail: 'Video renderer failed. Trying fallback...' });
@@ -812,16 +859,10 @@ function spawnUxplay(mp4Base?: string): void {
             mainWindow?.webContents.send('ios:mirror-ready');
         }
         if (/raop_rtp_mirror starting mirroring|begin streaming/i.test(text)) {
-            // A client connected — the GStreamer video window may have opened
-            // behind other windows. Raise it a few times after a delay.
-            const pid = proc.pid;
-            if (pid) {
-                let attempts = 0;
-                const raiseTimer = setInterval(() => {
-                    const raised = raiseProcessWindows(pid);
-                    if (raised > 0 || ++attempts > 10) clearInterval(raiseTimer);
-                }, 600);
-            }
+            console.log('[ios-mirror] mirroring started (stdout pattern matched), clearing raise timer');
+            clearUxplayRaiseTimer();
+            // Still raise once more to ensure window is on top
+            if (pid) raiseProcessWindows(pid);
             mainWindow?.webContents.send('ios:client-connected');
         }
         if (/client disconnected|disconnect/i.test(text)) {
@@ -838,6 +879,7 @@ function spawnUxplay(mp4Base?: string): void {
         mainWindow?.webContents.send('ios:mirror-error', { detail: e.message });
     });
     proc.on('close', (code) => {
+        clearUxplayRaiseTimer();
         if (!uxplayRestarting) {
             mainWindow?.webContents.send('ios:mirror-stopped', { code });
         }

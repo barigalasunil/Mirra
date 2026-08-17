@@ -9,23 +9,79 @@ electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     adbDiscoverIp: (deviceId) => electron_1.ipcRenderer.invoke('adb:discover-ip', deviceId),
     adbKeepAwake: (deviceId, state) => electron_1.ipcRenderer.invoke('adb:keep-awake', deviceId, state),
     adbScreenshot: (deviceId) => electron_1.ipcRenderer.invoke('adb:screenshot', deviceId),
+    iosDevices: () => electron_1.ipcRenderer.invoke('ios:devices'),
+    iosScreenshot: (udid) => electron_1.ipcRenderer.invoke('ios:screenshot', udid),
+    iosOpenStore: () => electron_1.ipcRenderer.invoke('ios:open-store'),
+    iosMirrorStart: () => electron_1.ipcRenderer.invoke('ios:mirror-start'),
+    iosMirrorStop: () => electron_1.ipcRenderer.invoke('ios:mirror-stop'),
+    iosRecordStart: () => electron_1.ipcRenderer.invoke('ios:record-start'),
+    iosRecordStop: () => electron_1.ipcRenderer.invoke('ios:record-stop'),
+    onIosMirrorStarted: (callback) => {
+        electron_1.ipcRenderer.on('ios:mirror-started', () => callback());
+    },
+    removeIosMirrorStarted: () => electron_1.ipcRenderer.removeAllListeners('ios:mirror-started'),
+    onIosMirrorStopped: (callback) => {
+        electron_1.ipcRenderer.on('ios:mirror-stopped', (_e, data) => callback(data.code));
+    },
+    removeIosMirrorStopped: () => electron_1.ipcRenderer.removeAllListeners('ios:mirror-stopped'),
+    onIosMirrorError: (callback) => {
+        electron_1.ipcRenderer.on('ios:mirror-error', (_e, data) => callback(data.detail));
+    },
+    removeIosMirrorError: () => electron_1.ipcRenderer.removeAllListeners('ios:mirror-error'),
+    onIosMirrorInstruction: (callback) => {
+        electron_1.ipcRenderer.on('ios:mirror-instruction', (_e, data) => callback(data.msg));
+    },
+    removeIosMirrorInstruction: () => electron_1.ipcRenderer.removeAllListeners('ios:mirror-instruction'),
+    onIosMirrorReady: (callback) => {
+        electron_1.ipcRenderer.on('ios:mirror-ready', () => callback());
+    },
+    removeIosMirrorReady: () => electron_1.ipcRenderer.removeAllListeners('ios:mirror-ready'),
+    onIosClientConnected: (callback) => {
+        electron_1.ipcRenderer.on('ios:client-connected', () => callback());
+    },
+    removeIosClientConnected: () => electron_1.ipcRenderer.removeAllListeners('ios:client-connected'),
+    onIosClientDisconnected: (callback) => {
+        electron_1.ipcRenderer.on('ios:client-disconnected', () => callback());
+    },
+    removeIosClientDisconnected: () => electron_1.ipcRenderer.removeAllListeners('ios:client-disconnected'),
+    recordStart: (deviceId) => electron_1.ipcRenderer.invoke('adb:record-start', deviceId),
+    recordStop: (deviceId) => electron_1.ipcRenderer.invoke('adb:record-stop', deviceId),
+    onRecordingSaved: (callback) => {
+        electron_1.ipcRenderer.on('recording:saved', (_e, data) => callback(data.filePath));
+    },
+    removeRecordingSaved: () => electron_1.ipcRenderer.removeAllListeners('recording:saved'),
+    screenshotGetData: () => electron_1.ipcRenderer.invoke('screenshot:get-data'),
+    screenshotCopyClipboard: () => electron_1.ipcRenderer.invoke('screenshot:copy-clipboard'),
+    screenshotSave: () => electron_1.ipcRenderer.invoke('screenshot:save'),
+    screenshotDismiss: () => electron_1.ipcRenderer.invoke('screenshot:dismiss'),
+    onScreenshotDataPush: (callback) => {
+        electron_1.ipcRenderer.on('screenshot:data-push', (_e, data) => callback(data));
+    },
+    readImageAsDataUrl: (imgPath) => electron_1.ipcRenderer.invoke('utils:read-image', imgPath),
     utilsSaveFileDialog: (defaultPath, filters) => electron_1.ipcRenderer.invoke('utils:save-file-dialog', defaultPath, filters),
     utilsGetPath: (name) => electron_1.ipcRenderer.invoke('utils:get-path', name),
     utilsCopyImageClipboard: (imgPath) => electron_1.ipcRenderer.invoke('utils:copy-image-clipboard', imgPath),
     utilsOpenFolder: (folderPath) => electron_1.ipcRenderer.invoke('utils:open-folder', folderPath),
+    utilsOpenFile: (filePath) => electron_1.ipcRenderer.invoke('utils:open-file', filePath),
     utilsCopyFile: (src, dest) => electron_1.ipcRenderer.invoke('utils:copy-file', src, dest),
     storeGet: (key, def) => electron_1.ipcRenderer.invoke('store:get', key, def),
     storeSet: (key, val) => electron_1.ipcRenderer.invoke('store:set', key, val),
-    scrcpyStart: (deviceId, settings) => electron_1.ipcRenderer.send('scrcpy:start', deviceId, settings),
-    scrcpyStop: () => electron_1.ipcRenderer.send('scrcpy:stop'),
-    onScrcpyDebug: (callback) => {
-        electron_1.ipcRenderer.on('scrcpy:debug', (_event, data) => callback(data));
+    scrcpyStart: (deviceId) => electron_1.ipcRenderer.invoke('scrcpy:start', deviceId),
+    scrcpyStop: () => electron_1.ipcRenderer.invoke('scrcpy:stop'),
+    scrcpyStatus: () => electron_1.ipcRenderer.invoke('scrcpy:status'),
+    setAlwaysOnTop: (value) => electron_1.ipcRenderer.invoke('window:set-always-on-top', value),
+    getAlwaysOnTop: () => electron_1.ipcRenderer.invoke('window:get-always-on-top'),
+    closeWindow: () => electron_1.ipcRenderer.invoke('window:close'),
+    toggleDevTools: () => electron_1.ipcRenderer.invoke('window:toggle-devtools'),
+    showContextMenu: (opts) => electron_1.ipcRenderer.invoke('menu:show-context', opts),
+    onMenuAction: (callback) => {
+        electron_1.ipcRenderer.on('menu:action', (_e, action) => callback(action));
     },
-    removeScrcpyDebug: () => electron_1.ipcRenderer.removeAllListeners('scrcpy:debug'),
-    onScrcpyStarted: (callback) => {
-        electron_1.ipcRenderer.on('scrcpy:started', (_event, deviceId) => callback(deviceId));
+    removeMenuAction: () => electron_1.ipcRenderer.removeAllListeners('menu:action'),
+    onScrcpyStopped: (callback) => {
+        electron_1.ipcRenderer.on('scrcpy:stopped', () => callback());
     },
-    removeScrcpyStarted: () => electron_1.ipcRenderer.removeAllListeners('scrcpy:started'),
+    removeScrcpyStopped: () => electron_1.ipcRenderer.removeAllListeners('scrcpy:stopped'),
     onScrcpyError: (callback) => {
         electron_1.ipcRenderer.on('scrcpy:error', (_event, msg) => callback(msg));
     },

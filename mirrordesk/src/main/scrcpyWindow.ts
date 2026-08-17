@@ -42,6 +42,12 @@ let mirrorHwnd: number | null = null;
 let currentRect: MirrorRect | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+// iOS mirror tracking (UxPlay window titled "Mirra")
+const IOS_MIRROR_TITLE = 'Mirra';
+let iosMirrorHwnd: number | null = null;
+let iosCurrentRect: MirrorRect | null = null;
+let iosPollTimer: ReturnType<typeof setInterval> | null = null;
+
 function findMirrorWindow(): number | null {
     try {
         const h = FindWindowW(null, MIRROR_TITLE);
@@ -146,4 +152,65 @@ export function raiseProcessWindows(pid: number): number {
         koffi.unregister(cb);
     }
     return raised;
+}
+
+// ── iOS mirror rect tracking ────────────────────────────────────────────────
+// UxPlay creates a GStreamer video window; -n Mirra sets the window title.
+
+function findIosMirrorWindow(): number | null {
+    try {
+        const h = FindWindowW(null, IOS_MIRROR_TITLE);
+        return h === 0 ? null : Number(h);
+    } catch {
+        return null;
+    }
+}
+
+function refreshIos() {
+    if (iosMirrorHwnd === null) {
+        iosMirrorHwnd = findIosMirrorWindow();
+        if (iosMirrorHwnd === null) return;
+    }
+    try {
+        const buf = Buffer.alloc(16);
+        if (GetWindowRect(iosMirrorHwnd, buf)) {
+            iosCurrentRect = {
+                left: buf.readInt32LE(0),
+                top: buf.readInt32LE(4),
+                right: buf.readInt32LE(8),
+                bottom: buf.readInt32LE(12),
+            };
+        } else {
+            iosMirrorHwnd = null;
+        }
+    } catch {
+        iosMirrorHwnd = null;
+    }
+}
+
+export function startIosTracking(onUpdate?: () => void): void {
+    stopIosTracking();
+    refreshIos();
+    onUpdate?.();
+    iosPollTimer = setInterval(() => {
+        refreshIos();
+        onUpdate?.();
+    }, 300);
+}
+
+export function stopIosTracking(): void {
+    if (iosPollTimer) {
+        clearInterval(iosPollTimer);
+        iosPollTimer = null;
+    }
+    iosMirrorHwnd = null;
+    iosCurrentRect = null;
+}
+
+export function getIosMirrorRect(): MirrorRect | null {
+    return iosCurrentRect;
+}
+
+export function refreshIosMirrorRect(): void {
+    refreshIos();
 }

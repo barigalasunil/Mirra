@@ -1,237 +1,136 @@
-**This GitHub repo (<https://github.com/Genymobile/scrcpy>) is the only official
-source for the project. Do not download releases from random websites, even if
-their name contains `scrcpy`.**
+# Mirra
 
-# scrcpy (v4.0)
+Mirra is a desktop app (Electron) that mirrors and controls an Android device on your computer by streaming the device's H.264 screen over a WebSocket and decoding it with WebCodecs (or MSE). Built on a vendored fork of [scrcpy](https://github.com/Genymobile/scrcpy).
 
-<img src="app/data/scrcpy.svg" width="128" height="128" alt="scrcpy" align="right" />
+> The active custom work lives in [`mirrordesk/`](mirrordesk/) — an Electron + React app. The rest of the repo is a vendored scrcpy v4.0 tree (C client + Java Android server) that provides the foundation.
 
-_pronounced "**scr**een **c**o**py**"_
+## Overview
 
-This application mirrors Android devices (video and audio) connected via USB or
-[TCP/IP](doc/connection.md#tcpip-wireless) and allows control using the
-computer's keyboard and mouse. It does not require _root_ access or an app
-installed on the device. It works on _Linux_, _Windows_, and _macOS_.
+AndroMirror is a work-in-progress desktop app for Android mirroring that takes a different decoding path than the classic scrcpy (OpenGL/SDL). Instead of rendering the video stream natively in C, an Electron main process bridges an ADB-forwarded TCP socket from the device to a WebSocket server, and the React renderer decodes the raw H.264 Annex-B NAL stream in the browser using the **WebCodecs** API (with a **Media Source Extensions** fallback). Device input (touch / scroll / keys) is sent back through the same WebSocket to the device's `scrcpy` control socket.
 
-[![Linux](https://img.shields.io/badge/Linux-download-orange?style=for-the-badge&logo=linux)](doc/linux.md)&nbsp;
-[![Windows](https://img.shields.io/badge/Windows-download-blue?style=for-the-badge&logo=windows)](doc/windows.md)&nbsp;
-[![macOS](https://img.shields.io/badge/macOS-download-brightgreen?style=for-the-badge&logo=apple)](doc/macos.md)&nbsp;
+The app uses a [ws-scrcpy](https://github.com/NetrisTV/ws-scrcpy)-style **forked server** (`scrcpy-server.jar`) that serves a single raw stream socket on TCP port `8886`, instead of the standard scrcpy server's dual abstract sockets. This is an experimental prototype — the mirroring pipeline is under active debugging (see [Status](#status)).
 
-![screenshot](assets/screenshot-debian-600.jpg)
+## Tech Stack
 
-It focuses on:
+- **scrcpy fork** — [scrcpy v4.0](https://github.com/Genymobile/scrcpy) source tree
+  - **C client** (Meson / Ninja build, FFmpeg + SDL2) in [`app/`](app/)
+  - **Android server** (Java, Gradle + AGP 9.1, minSdk 21 / targetSdk 36) in [`server/`](server/)
+  - **ws-scrcpy forked server** binary (`scrcpy-server.jar`) bundled in [`mirrordesk/resources/scrcpy/`](mirrordesk/resources/scrcpy/)
+- **MirrorDesk app** (`mirrordesk/`)
+  - TypeScript, **Electron 42**, **React 19**, **Vite 8**
+  - **Tailwind CSS** UI, **lucide-react** icons, `clsx`/`tailwind-merge`
+  - **`ws`** WebSocket server in the main process, **`electron-store`** for persistence
+  - `h264-converter`, `electron-builder` (NSIS Windows installer)
+  - Video decoding: **WebCodecs** (`VideoDecoder`) primary, **MSE** (`MediaSource`/`SourceBuffer`) fallback
 
- - **lightness**: native, displays only the device screen
- - **performance**: 30~120fps, depending on the device
- - **quality**: 1920×1080 or above
- - **low latency**: [35~70ms][lowlatency]
- - **low startup time**: ~1 second to display the first image
- - **non-intrusiveness**: nothing is left installed on the Android device
- - **user benefits**: no account, no ads, no internet required
- - **freedom**: free and open source software
+## Features
 
-[lowlatency]: https://github.com/Genymobile/scrcpy/pull/646
+From the app code (`mirrordesk/`):
 
-Its features include:
- - [audio forwarding](doc/audio.md) (Android 11+)
- - [recording](doc/recording.md)
- - [virtual display](doc/virtual-display.md)
- - mirroring with [Android device screen off](doc/device.md#turn-screen-off)
- - [copy-paste](doc/control.md#copy-paste) in both directions
- - [configurable quality](doc/video.md)
- - [camera mirroring](doc/camera.md) (Android 12+)
- - [mirroring as a webcam (V4L2)](doc/v4l2.md) (Linux-only)
- - physical [keyboard][hid-keyboard] and [mouse][hid-mouse] simulation (HID)
- - [gamepad](doc/gamepad.md) support
- - [OTG mode](doc/otg.md)
- - and more…
+- **Device discovery** over ADB — lists connected devices (USB and Wi-Fi) with model, battery level, connection type, and IP (`main.ts` IPC `adb:devices` / `adb:device-status`)
+- **Wi-Fi connection** — connect to an IP:port, auto-discover the device's IP, and enable wireless debugging via `adb tcpip 5555`
+- **Real-time mirroring** — WebSocket bridge forwards the raw H.264 stream; decoded via WebCodecs onto a canvas (MSE fallback for browsers/run-times without WebCodecs)
+- **Interactive control** — touch / scroll / key input is serialized (`control/ControlMessage.ts`) and forwarded back to the device control socket
+- **Streaming settings** — resolution (Original/1440p/1080p/720p/480p), video bitrate, and frame-rate presets
+- **Screenshot** — capture, then copy to clipboard or save via a save dialog
+- **Keep-awake** toggle (`settings put global stay_on_while_plugged_in`)
+- **Auto-reconnect** with bounded retry (up to 5 attempts) when the device socket drops
+- **Stream diagnostics panel** — live NAL-unit counts (SPS/PPS/IDR/SEI), decoder state, bytes/sec, WebSocket state, and a downloadable `.h264` stream dump for debugging
+- **Dark / light theme**, persisted window size and settings (`electron-store`)
+- An **Annex-B NAL stream parser** (`StreamParser.ts`) that splits the byte stream into NAL units by 3/4-byte start codes, used by both players
 
-[hid-keyboard]: doc/keyboard.md#physical-keyboard-simulation
-[hid-mouse]: doc/mouse.md#physical-mouse-simulation
-
-## Prerequisites
-
-The Android device requires at least API 21 (Android 5.0).
-
-[Audio forwarding](doc/audio.md) is supported for API >= 30 (Android 11+).
-
-Make sure you [enabled USB debugging][enable-adb] on your device(s).
-
-[enable-adb]: https://developer.android.com/studio/debug/dev-options#enable
-
-On some devices (especially Xiaomi), you might get the following error:
+## Project Structure
 
 ```
-Injecting input events requires the caller (or the source of the instrumentation, if any) to have the INJECT_EVENTS permission.
+AndroMirror/
+├── mirrordesk/              # ★ The actual app (Electron + React + Vite)
+│   ├── src/main/            # Electron main process
+│   │   ├── main.ts          # Window, ADB IPC handlers, settings store
+│   │   ├── scrcpy-ws.ts     # WebSocket server ↔ ADB-forwarded device bridge
+│   │   └── preload.ts       # contextBridge API surface
+│   ├── src/renderer/        # React UI (Tailwind)
+│   │   ├── components/MirrorView.tsx  # WS client, stream diagnostics UI
+│   │   ├── player/          # WebCodecsPlayer, MsePlayer, StreamParser (NAL parser)
+│   │   └── control/         # ControlMessage + touch/scroll/key serializers
+│   ├── src/shared/types.ts  # Shared TS types (device, settings, control)
+│   ├── resources/scrcpy/    # Bundled adb.exe + forked scrcpy-server.jar
+│   ├── download.ps1         # Fetches scrcpy win64 tools into resources/
+│   └── electron-builder.yml # NSIS packaging config
+├── app/                     # Vendored scrcpy C client (Meson build)
+├── server/                  # Vendored scrcpy Android server (Gradle build)
+├── config/                  # Checkstyle config for the server
+├── doc/                     # Upstream scrcpy documentation (build.md, etc.)
+├── release/                 # Upstream release/packaging scripts
+├── meson.build              # scrcpy client build entry
+├── build.gradle             # Root Gradle config (server module)
+└── run                      # Helper: ./run BUILDDIR <scrcpy options>
 ```
 
-In that case, you need to enable [an additional option][control] `USB debugging
-(Security Settings)` (this is an item different from `USB debugging`) to control
-it using a keyboard and mouse. Rebooting the device is necessary once this
-option is set.
+## Getting Started
 
-[control]: https://github.com/Genymobile/scrcpy/issues/70#issuecomment-373286323
+### MirrorDesk (Electron app) — the primary way to run this
 
-Note that USB debugging is not required to run scrcpy in [OTG mode](doc/otg.md).
+Prerequisites: Node.js (with npm). Windows is the target platform (electron-builder NSIS, bundled `adb.exe`).
 
+```bash
+cd mirrordesk
+npm install
 
-## Get the app
+# Fetch scrcpy tools (adb.exe, DLLs) into resources/scrcpy/ if not already present:
+powershell -ExecutionPolicy Bypass -File download.ps1
+```
 
- - [Linux](doc/linux.md)
- - [Windows](doc/windows.md) (read [how to run](doc/windows.md#run))
- - [macOS](doc/macos.md)
+Run in development:
 
+```bash
+npm run dev
+```
 
-## Must-know tips
+This starts the Vite renderer (port 5173) and Electron main process. Plug in an Android device with USB debugging enabled (or connect over Wi-Fi), select it, and click **Start Mirroring**.
 
- - [Reducing resolution](doc/video.md#size) may greatly improve performance
-   (`scrcpy -m1024`)
- - [_Right-click_](doc/mouse.md#mouse-bindings) triggers `BACK`
- - [_Middle-click_](doc/mouse.md#mouse-bindings) triggers `HOME`
- - <kbd>Alt</kbd>+<kbd>f</kbd> toggles [fullscreen](doc/window.md#fullscreen)
- - There are many other [shortcuts](doc/shortcuts.md)
+Build an installer:
 
+```bash
+npm run build          # tsc (main + renderer) → vite build → electron-builder (NSIS)
+```
 
-## Usage examples
+> The app expects `adb.exe` and `scrcpy-server.jar` in `resources/scrcpy/`. The checked-in `scrcpy-server.jar` (114 KB) is the ws-scrcpy fork; `adb.exe` can be refreshed with `download.ps1`.
 
-There are a lot of options, [documented](#user-documentation) in separate pages.
-Here are just some common examples.
+### Building the vendored scrcpy (optional, from source)
 
- - Capture the screen in H.265 (better quality), limit the size to 1920, limit
-   the frame rate to 60fps, disable audio, and control the device by simulating
-   a physical keyboard:
+The classic scrcpy client/server build still works as upstream:
 
-    ```bash
-    scrcpy --video-codec=h265 --max-size=1920 --max-fps=60 --no-audio --keyboard=uhid
-    scrcpy --video-codec=h265 -m1920 --max-fps=60 --no-audio -K  # short version
-    ```
+```bash
+# Client (C):
+meson setup build-auto --buildtype=release
+ninja -C build-auto
+# Run: ./run build-auto -m1024
 
- - Start VLC in a new virtual display (separate from the device display):
+# Server (Java): produces server/build/outputs/apk/release/server-release-unsigned.apk
+./gradlew -p server assembleRelease
+```
 
-    ```bash
-    scrcpy --new-display=1920x1080 --start-app=org.videolan.vlc
-    ```
+See [`doc/build.md`](doc/build.md) for full system-specific instructions.
 
- - Start VLC in a new _flex_ display using H.265 with a bitrate of 16 Mbps,
-   while keeping the display active so it does not turn off:
+## Usage
 
-    ```bash
-    scrcpy --new-display -x --keep-active --start-app=org.videolan.vlc --video-codec=h265 -b16M
-    ```
+1. Launch the app (or run `npm run dev`).
+2. With a device selected, click **Start Mirroring**.
+3. The toolbar shows battery, connection type (USB/Wi-Fi), and IP.
+4. The on-screen diagnostics panel exposes live stream stats and lets you switch between the WebCodecs and MSE players or download a raw `.h264` dump.
+5. Use **Screenshot**, **Keep Awake**, and the **Settings** panel (resolution / bitrate / FPS) from the toolbar.
 
- - Record the device camera in H.265 at 1920x1080 (and microphone) to an MP4
-   file:
+## Status
 
-    ```bash
-    scrcpy --video-source=camera --video-codec=h265 --camera-size=1920x1080 --record=file.mp4
-    ```
+**Experimental / work-in-progress.** The git history is short (4 commits, all on 2026-05-25) and reads like a debugging session:
 
- - Capture the device front camera and expose it as a webcam on the computer (on
-   Linux):
+- `f00185c` initial import of scrcpy v4.0 + MirrorDesk app ("Fix blank mirroring…")
+- `68650c4` "Switch to ws-scrcpy forked server protocol"
+- `2adeab7` "Fix blank screen: Annex-B stream parser + decoder config timing"
+- `a9ea824` "Fix server path: use scrcpy-server.jar (ws-scrcpy fork)"
 
-    ```bash
-    scrcpy --video-source=camera --camera-size=1920x1080 --camera-facing=front --v4l2-sink=/dev/video2 --no-playback
-    ```
-
- - Control the device without mirroring by simulating a physical keyboard and
-   mouse (USB debugging not required):
-
-    ```bash
-    scrcpy --otg
-    ```
-
- - Control the device using gamepads plugged into the computer:
-
-    ```bash
-    scrcpy --gamepad=uhid
-    scrcpy -G  # short version
-    ```
-
-## User documentation
-
-The application provides a lot of features and configuration options. They are
-documented in the following pages:
-
- - [Connection](doc/connection.md)
- - [Video](doc/video.md)
- - [Audio](doc/audio.md)
- - [Control](doc/control.md)
- - [Keyboard](doc/keyboard.md)
- - [Mouse](doc/mouse.md)
- - [Gamepad](doc/gamepad.md)
- - [Device](doc/device.md)
- - [Window](doc/window.md)
- - [Recording](doc/recording.md)
- - [Virtual display](doc/virtual-display.md)
- - [Tunnels](doc/tunnels.md)
- - [OTG](doc/otg.md)
- - [Camera](doc/camera.md)
- - [Video4Linux](doc/v4l2.md)
- - [Shortcuts](doc/shortcuts.md)
-
-
-## Resources
-
- - [FAQ](FAQ.md)
- - [Translations][wiki] (not necessarily up to date)
- - [Build instructions](doc/build.md)
- - [Developers](doc/develop.md)
- - [Verify release signatures](doc/verify-release.md)
-
-[wiki]: https://github.com/Genymobile/scrcpy/wiki
-
-
-## Articles
-
-- [Introducing scrcpy][article-intro]
-- [Scrcpy now works wirelessly][article-tcpip]
-- [Scrcpy 2.0, with audio][article-scrcpy2]
-
-[article-intro]: https://blog.rom1v.com/2018/03/introducing-scrcpy/
-[article-tcpip]: https://www.genymotion.com/blog/open-source-project-scrcpy-now-works-wirelessly/
-[article-scrcpy2]: https://blog.rom1v.com/2023/03/scrcpy-2-0-with-audio/
-
-## Contact
-
-You can open an [issue] for bug reports, feature requests or general questions.
-
-For bug reports, please read the [FAQ](FAQ.md) first, you might find a solution
-to your problem immediately.
-
-[issue]: https://github.com/Genymobile/scrcpy/issues
-
-You can also use:
-
- - Reddit: [`r/scrcpy`](https://www.reddit.com/r/scrcpy)
- - BlueSky: [`@scrcpy.bsky.social`](https://bsky.app/profile/scrcpy.bsky.social)
- - Twitter: [`@scrcpy_app`](https://twitter.com/scrcpy_app)
-
-
-## Donate
-
-I'm [@rom1v](https://github.com/rom1v), the author and maintainer of _scrcpy_.
-
-If you appreciate this application, you can [support my open source
-work][donate]:
- - [GitHub Sponsors](https://github.com/sponsors/rom1v)
- - [Liberapay](https://liberapay.com/rom1v/)
- - [PayPal](https://paypal.me/rom2v)
-
-[donate]: https://blog.rom1v.com/about/#support-my-open-source-work
+Heavy debug instrumentation remains throughout (`console.log` per NAL/frame, hex dumps, downloadable stream dumps, live diagnostics overlays), the app version is `0.0.0`, and the mirroring pipeline was still being stabilized at the last commit. The vendored scrcpy tree is unmodified upstream code; **audio and the other advanced upstream scrcpy features are not wired into MirrorDesk** (video-only streaming, H.264).
 
 ## License
 
-    Copyright (C) 2018 Genymobile
-    Copyright (C) 2018-2026 Romain Vimont
-
-    Licensed under the Apache License, Version 2.0 (the "License");
-    you may not use this file except in compliance with the License.
-    You may obtain a copy of the License at
-
-        http://www.apache.org/licenses/LICENSE-2.0
-
-    Unless required by applicable law or agreed to in writing, software
-    distributed under the License is distributed on an "AS IS" BASIS,
-    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-    See the License for the specific language governing permissions and
-    limitations under the License.
+Apache License 2.0 — see [LICENSE](LICENSE). scrcpy is Copyright (C) 2018 Genymobile and 2018-2026 Romain Vimont.
