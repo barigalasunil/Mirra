@@ -3,6 +3,12 @@
   "productName": "Mirra",
   "private": true,
   "version": "0.1.0",
+  "description": "Mirra - Android & iOS screen mirroring desktop app",
+  "author": "barigalasunil",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/barigalasunil/Mirra.git"
+  },
   "main": "dist-main/main/main.js",
   "type": "commonjs",
   "scripts": {

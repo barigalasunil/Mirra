@@ -10,8 +10,7 @@ mirrordesk/release/
 # Python venv (iOS support)
 mirrordesk/resources/ios/.venv/
 
-# Large binary resources (download from Releases)
-mirrordesk/resources/ios/
+# Scrcpy resources (download via download.ps1)
 mirrordesk/resources/scrcpy/
 
 # Electron cache
