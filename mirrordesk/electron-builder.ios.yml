@@ -1,9 +1,9 @@
-appId: com.mirra.app
-productName: Mirra
+appId: com.mirra.ios
+productName: "Mirra iOS"
 copyright: "Copyright © 2026 Mirra"
 
 directories:
-  output: release/combined
+  output: release/ios
 
 files:
   - dist-main/**/*
@@ -23,16 +23,13 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
-  createStartMenuShortcut: true
-  shortcutName: Mirra
-  artifactName: "Mirra-${version}-setup.exe"
+  shortcutName: "Mirra iOS"
+  artifactName: "Mirra-iOS-${version}-setup.exe"
 
 portable:
-  artifactName: "Mirra-${version}-portable.exe"
+  artifactName: "Mirra-iOS-${version}-portable.exe"
 
 extraResources:
-  - from: resources/scrcpy
-    to: scrcpy
   - from: resources/ios
     to: ios
 

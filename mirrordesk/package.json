@@ -11,7 +11,10 @@
     "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:main\" \"wait-on tcp:5173 && cross-env NODE_ENV=development electron .\"",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "tsc -b && vite build",
-    "build": "npm run build:main && npm run build:renderer && electron-builder"
+    "build": "npm run build:main && npm run build:renderer && electron-builder --config electron-builder.yml",
+    "build:android": "npm run build:main && npm run build:renderer && electron-builder --config electron-builder.android.yml",
+    "build:ios": "npm run build:main && npm run build:renderer && electron-builder --config electron-builder.ios.yml",
+    "build:all": "npm run build && npm run build:android && npm run build:ios"
   },
   "dependencies": {
     "clsx": "^2.1.1",

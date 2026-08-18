@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, nativeImage, screen, Menu } from 'electron';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { networkInterfaces } from 'os';
@@ -18,6 +18,7 @@ import {
     stopIosTracking,
     getIosMirrorRect,
     refreshIosMirrorRect,
+    resizeIosMirrorWindow,
 } from './scrcpyWindow';
 const store: any = new Store();
 const isDev = process.env.NODE_ENV === 'development';
@@ -31,6 +32,56 @@ let uxplayProcess: ReturnType<typeof spawn> | null = null;
 const suppressedProcs = new Set<any>();
 let ipcInitialized = false;
 let uxplayRaiseTimer: ReturnType<typeof setInterval> | null = null;
+
+// --- Firewall auto-setup (Windows) ---
+const AIRPLAY_RULE_NAME = 'Mirra AirPlay';
+let firewallChecked = false;
+
+function ensureFirewallRules(): void {
+    if (firewallChecked || process.platform !== 'win32') return;
+    firewallChecked = true;
+
+    const checkRule = (ruleName: string): Promise<boolean> =>
+        new Promise(resolve => {
+            execFile('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${ruleName}`], { windowsHide: true }, (err, stdout) => {
+                resolve(!err && stdout.includes(ruleName));
+            });
+        });
+
+    const addRule = (ruleName: string, protocol: string, ports: string): Promise<boolean> =>
+        new Promise(resolve => {
+            execFile('netsh', [
+                'advfirewall', 'firewall', 'add', 'rule',
+                `name=${ruleName}`, 'dir=in', 'action=allow',
+                `protocol=${protocol}`, `localport=${ports}`
+            ], { windowsHide: true }, (err) => resolve(!err));
+        });
+
+    (async () => {
+        const tcpExists = await checkRule(`${AIRPLAY_RULE_NAME} TCP`);
+        const udpExists = await checkRule(`${AIRPLAY_RULE_NAME} UDP`);
+
+        if (tcpExists && udpExists) {
+            console.log('[firewall] AirPlay rules already exist');
+            return;
+        }
+
+        if (!tcpExists) {
+            const ok = await addRule(`${AIRPLAY_RULE_NAME} TCP`, 'TCP', '7000-7002');
+            console.log('[firewall] TCP rule:', ok ? 'created' : 'failed (may need admin)');
+        }
+        if (!udpExists) {
+            const ok = await addRule(`${AIRPLAY_RULE_NAME} UDP`, 'UDP', '7000-7002');
+            console.log('[firewall] UDP rule:', ok ? 'created' : 'failed (may need admin)');
+        }
+
+        if (!tcpExists || !udpExists) {
+            mainWindow?.webContents.send('ios:mirror-instruction', {
+                msg: 'If iPhone cannot connect: run as Administrator once, or allow Mirra in Windows Firewall'
+            });
+        }
+    })();
+}
 
 const ts = () => {
     const d = new Date();
@@ -142,6 +193,7 @@ async function createWindow() {
 
 app.whenReady().then(() => {
     createWindow();
+    ensureFirewallRules();
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
@@ -790,7 +842,7 @@ function spawnUxplay(mp4Base?: string): void {
     const uxplayDir = path.dirname(uxplayPath);
     const proc = spawn(uxplayPath, args, {
         cwd: uxplayDir,
-        windowsHide: true,
+        windowsHide: false,
         env: {
             ...process.env,
             GST_PLUGIN_PATH: path.join(uxplayDir, 'lib', 'gstreamer-1.0'),
@@ -810,9 +862,8 @@ function spawnUxplay(mp4Base?: string): void {
         console.log('[ios-mirror] starting periodic raiseProcessWindows for pid', pid);
         uxplayRaiseTimer = setInterval(() => {
             const raised = raiseProcessWindows(pid);
-            if (raised > 0) {
-                console.log('[ios-mirror] raiseProcessWindows found', raised, 'window(s)');
-            }
+            console.log('[ios-mirror] raiseProcessWindows returned', raised, 'for pid', pid, '(attempt', raiseAttempts + 1, '/ 30)');
+            if (raised > 0) resizeIosMirrorWindow();
             if (++raiseAttempts > 30) {
                 clearUxplayRaiseTimer();
             }
@@ -861,8 +912,8 @@ function spawnUxplay(mp4Base?: string): void {
         if (/raop_rtp_mirror starting mirroring|begin streaming/i.test(text)) {
             console.log('[ios-mirror] mirroring started (stdout pattern matched), clearing raise timer');
             clearUxplayRaiseTimer();
-            // Still raise once more to ensure window is on top
             if (pid) raiseProcessWindows(pid);
+            resizeIosMirrorWindow();
             mainWindow?.webContents.send('ios:client-connected');
         }
         if (/client disconnected|disconnect/i.test(text)) {

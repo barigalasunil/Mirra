@@ -1,16 +1,26 @@
-name: Build Mirra
+name: Build and Release Mirra
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      flavour:
+        description: 'Which build to run'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, combined, android, ios]
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
+    timeout-minutes: 60
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -20,24 +30,106 @@ jobs:
           cache-dependency-path: mirrordesk/package-lock.json
 
       - name: Install dependencies
-        run: cd mirrordesk && npm ci
+        working-directory: mirrordesk
+        run: npm ci
 
-      - name: Build
-        run: cd mirrordesk && npm run build
+      - name: Compile TypeScript (main)
+        working-directory: mirrordesk
+        run: npx tsc -p tsconfig.main.json
 
-      - name: Upload artifacts
+      - name: Compile TypeScript (renderer types)
+        working-directory: mirrordesk
+        run: npx tsc -b
+
+      - name: Build renderer (Vite)
+        working-directory: mirrordesk
+        run: npx vite build
+
+      - name: Build Combined (Android + iOS)
+        if: >
+          github.event.inputs.flavour == 'all' ||
+          github.event.inputs.flavour == 'combined' ||
+          github.event.inputs.flavour == ''
+        working-directory: mirrordesk
+        run: npx electron-builder --config electron-builder.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Android only
+        if: >
+          github.event.inputs.flavour == 'all' ||
+          github.event.inputs.flavour == 'android' ||
+          github.event.inputs.flavour == ''
+        working-directory: mirrordesk
+        run: npx electron-builder --config electron-builder.android.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build iOS only
+        if: >
+          github.event.inputs.flavour == 'all' ||
+          github.event.inputs.flavour == 'ios' ||
+          github.event.inputs.flavour == ''
+        working-directory: mirrordesk
+        run: npx electron-builder --config electron-builder.ios.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Combined artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: mirra-windows
-          path: |
-            mirrordesk/release/*.exe
-          retention-days: 30
+          name: mirra-combined
+          path: mirrordesk/release/combined/*.exe
+          if-no-files-found: ignore
 
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
         with:
-          files: mirrordesk/release/*.exe
+          name: mirra-android
+          path: mirrordesk/release/android/*.exe
+          if-no-files-found: ignore
+
+      - name: Upload iOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mirra-ios
+          path: mirrordesk/release/ios/*.exe
+          if-no-files-found: ignore
+
+      - name: Create GitHub Release with all EXEs
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Mirra ${{ github.ref_name }}"
+          body: |
+            ## Mirra ${{ github.ref_name }}
+
+            Download the version that fits your needs:
+
+            | File | Platform | Size |
+            |------|----------|------|
+            | `Mirra-*-portable.exe` | Android + iOS | ~200MB |
+            | `Mirra-Android-*-portable.exe` | Android only | ~80MB |
+            | `Mirra-iOS-*-portable.exe` | iOS only | ~120MB |
+
+            ### How to install
+            - **Portable**: just double-click, no installation needed
+            - **Setup**: run the installer, follow the wizard
+
+            ### Android requirements
+            - USB Debugging enabled on your Android device
+            - Windows 10/11 64-bit
+
+            ### iOS requirements  
+            - iPhone and PC on the **same Wi-Fi network**
+            - iTunes installed (Microsoft Store)
+            - Open Control Center → Screen Mirroring → **Mirra**
+
+            > ⏱ First launch takes 5-10 seconds — this is normal.
+          files: |
+            mirrordesk/release/combined/*.exe
+            mirrordesk/release/android/*.exe
+            mirrordesk/release/ios/*.exe
           draft: false
           prerelease: false
         env:

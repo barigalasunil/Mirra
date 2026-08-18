@@ -23,6 +23,47 @@ let uxplayProcess = null;
 const suppressedProcs = new Set();
 let ipcInitialized = false;
 let uxplayRaiseTimer = null;
+// --- Firewall auto-setup (Windows) ---
+const AIRPLAY_RULE_NAME = 'Mirra AirPlay';
+let firewallChecked = false;
+function ensureFirewallRules() {
+    if (firewallChecked || process.platform !== 'win32')
+        return;
+    firewallChecked = true;
+    const checkRule = (ruleName) => new Promise(resolve => {
+        (0, child_process_1.execFile)('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${ruleName}`], { windowsHide: true }, (err, stdout) => {
+            resolve(!err && stdout.includes(ruleName));
+        });
+    });
+    const addRule = (ruleName, protocol, ports) => new Promise(resolve => {
+        (0, child_process_1.execFile)('netsh', [
+            'advfirewall', 'firewall', 'add', 'rule',
+            `name=${ruleName}`, 'dir=in', 'action=allow',
+            `protocol=${protocol}`, `localport=${ports}`
+        ], { windowsHide: true }, (err) => resolve(!err));
+    });
+    (async () => {
+        const tcpExists = await checkRule(`${AIRPLAY_RULE_NAME} TCP`);
+        const udpExists = await checkRule(`${AIRPLAY_RULE_NAME} UDP`);
+        if (tcpExists && udpExists) {
+            console.log('[firewall] AirPlay rules already exist');
+            return;
+        }
+        if (!tcpExists) {
+            const ok = await addRule(`${AIRPLAY_RULE_NAME} TCP`, 'TCP', '7000-7002');
+            console.log('[firewall] TCP rule:', ok ? 'created' : 'failed (may need admin)');
+        }
+        if (!udpExists) {
+            const ok = await addRule(`${AIRPLAY_RULE_NAME} UDP`, 'UDP', '7000-7002');
+            console.log('[firewall] UDP rule:', ok ? 'created' : 'failed (may need admin)');
+        }
+        if (!tcpExists || !udpExists) {
+            mainWindow?.webContents.send('ios:mirror-instruction', {
+                msg: 'If iPhone cannot connect: run as Administrator once, or allow Mirra in Windows Firewall'
+            });
+        }
+    })();
+}
 const ts = () => {
     const d = new Date();
     return d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
@@ -126,6 +167,7 @@ async function createWindow() {
 }
 electron_1.app.whenReady().then(() => {
     createWindow();
+    ensureFirewallRules();
     electron_1.app.on('activate', () => {
         if (electron_1.BrowserWindow.getAllWindows().length === 0) {
             createWindow();
@@ -734,7 +776,7 @@ if (!ipcInitialized) {
         const uxplayDir = path_1.default.dirname(uxplayPath);
         const proc = (0, child_process_1.spawn)(uxplayPath, args, {
             cwd: uxplayDir,
-            windowsHide: true,
+            windowsHide: false,
             env: {
                 ...process.env,
                 GST_PLUGIN_PATH: path_1.default.join(uxplayDir, 'lib', 'gstreamer-1.0'),
@@ -753,9 +795,9 @@ if (!ipcInitialized) {
             console.log('[ios-mirror] starting periodic raiseProcessWindows for pid', pid);
             uxplayRaiseTimer = setInterval(() => {
                 const raised = (0, scrcpyWindow_1.raiseProcessWindows)(pid);
-                if (raised > 0) {
-                    console.log('[ios-mirror] raiseProcessWindows found', raised, 'window(s)');
-                }
+                console.log('[ios-mirror] raiseProcessWindows returned', raised, 'for pid', pid, '(attempt', raiseAttempts + 1, '/ 30)');
+                if (raised > 0)
+                    (0, scrcpyWindow_1.resizeIosMirrorWindow)();
                 if (++raiseAttempts > 30) {
                     clearUxplayRaiseTimer();
                 }
@@ -804,9 +846,9 @@ if (!ipcInitialized) {
             if (/raop_rtp_mirror starting mirroring|begin streaming/i.test(text)) {
                 console.log('[ios-mirror] mirroring started (stdout pattern matched), clearing raise timer');
                 clearUxplayRaiseTimer();
-                // Still raise once more to ensure window is on top
                 if (pid)
                     (0, scrcpyWindow_1.raiseProcessWindows)(pid);
+                (0, scrcpyWindow_1.resizeIosMirrorWindow)();
                 mainWindow?.webContents.send('ios:client-connected');
             }
             if (/client disconnected|disconnect/i.test(text)) {

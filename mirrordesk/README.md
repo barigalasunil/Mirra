@@ -87,11 +87,20 @@ One click to screenshot, one click to record, zero clutter.
 
 ## Installation
 
-### Download (Recommended)
+### How to Download (Important)
 
-Grab `Mirra-portable.exe` from [Releases](https://github.com/barigalasunil/Mirra/releases) — no install needed, just run it.
+Go to the **[Releases page](../../releases/latest)** and download
+the `.exe` file directly. Do NOT download from the Actions tab
+(those are zipped artifacts for developers, not for end users).
 
-Or download the NSIS installer for a traditional install with Start Menu shortcuts.
+| File | Use this if... |
+|------|---------------|
+| `Mirra-VERSION-portable.exe` | You want Android + iOS support |
+| `Mirra-Android-VERSION-portable.exe` | Android only, smaller download |
+| `Mirra-iOS-VERSION-portable.exe` | iPhone only |
+| `Mirra-VERSION-setup.exe` | Prefer an installer with Start Menu shortcut |
+
+**Portable = just double-click, no install needed.**
 
 ---
 
@@ -116,15 +125,22 @@ npm run dev
 | Command | Description |
 |---|---|
 | `npm run dev` | Start dev mode (Vite + TypeScript watcher + Electron) |
-| `npm run build` | Build everything (TypeScript + Vite + electron-builder) |
+| `npm run build` | Build combined (Android + iOS) |
+| `npm run build:android` | Build Android-only flavour |
+| `npm run build:ios` | Build iOS-only flavour |
+| `npm run build:all` | Build all 3 flavours sequentially |
 | `npm run build:main` | Build only the main process (TypeScript) |
 | `npm run build:renderer` | Build only the renderer (TypeScript + Vite) |
 
 ### Build output
 
-The packaged app is output to `mirrordesk/release/`:
-- `Mirra-Setup-0.1.0.exe` — NSIS installer
-- `Mirra-portable-0.1.0.exe` — Portable (no install required)
+The packaged app is output to `mirrordesk/release/` in 3 subfolders:
+
+| Folder | Contents |
+|---|---|
+| `release/combined/` | `Mirra-VERSION-portable.exe`, `Mirra-VERSION-setup.exe` |
+| `release/android/` | `Mirra-Android-VERSION-portable.exe`, `Mirra-Android-VERSION-setup.exe` |
+| `release/ios/` | `Mirra-iOS-VERSION-portable.exe`, `Mirra-iOS-VERSION-setup.exe` |
 
 ---
 
@@ -251,7 +267,9 @@ Mirra/
 │   ├── resources/
 │   │   ├── scrcpy/                # Bundled scrcpy binaries (adb, scrcpy, SDL2, FFmpeg)
 │   │   └── ios/                   # UxPlay + GStreamer + pymobiledevice3
-│   ├── electron-builder.yml       # Build config (NSIS + portable)
+│   ├── electron-builder.yml           # Build config — Combined (Android + iOS)
+│   ├── electron-builder.android.yml   # Build config — Android only
+│   ├── electron-builder.ios.yml       # Build config — iOS only
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── tailwind.config.js

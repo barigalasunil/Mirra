@@ -11,6 +11,9 @@
   "scripts": {
     "dev": "cd mirrordesk && npm run dev",
     "build": "cd mirrordesk && npm run build",
+    "build:android": "cd mirrordesk && npm run build:android",
+    "build:ios": "cd mirrordesk && npm run build:ios",
+    "build:all": "cd mirrordesk && npm run build:all",
     "install-app": "cd mirrordesk && npm install",
     "release": "git tag v0.1.0 && git push origin v0.1.0"
   }

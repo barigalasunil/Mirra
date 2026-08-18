@@ -129,25 +129,28 @@ export function closeMirrorGracefully(): void {
 export function raiseProcessWindows(pid: number): number {
     if (!pid) return 0;
     let raised = 0;
+    let enumerated = 0;
     const cb = koffi.register((hwnd: unknown): boolean => {
         try {
+            enumerated++;
             const pidBuf = Buffer.alloc(4);
             GetWindowThreadProcessId(hwnd, pidBuf);
             if (pidBuf.readUInt32LE(0) !== pid) return true;
             if (!IsWindowVisible(hwnd)) return true;
-            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             ShowWindow(hwnd, SW_RESTORE);
+            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             SetForegroundWindow(hwnd);
             raised++;
-        } catch {
-            // ignore individual window errors
+        } catch (e) {
+            console.error('[raiseProcessWindows] callback error:', e);
         }
         return true;
     }, koffi.pointer(WNDENUMPROC));
     try {
-        EnumWindows(cb, null);
-    } catch {
-        // EnumWindows failed — nothing we can do
+        const result = EnumWindows(cb, null);
+        console.log('[raiseProcessWindows] EnumWindows returned', result, '- enumerated', enumerated, 'windows, raised', raised, 'for pid', pid);
+    } catch (e) {
+        console.error('[raiseProcessWindows] EnumWindows exception:', e);
     } finally {
         koffi.unregister(cb);
     }
@@ -213,4 +216,28 @@ export function getIosMirrorRect(): MirrorRect | null {
 
 export function refreshIosMirrorRect(): void {
     refreshIos();
+}
+
+// ── iOS mirror window resize ────────────────────────────────────────────────
+// GStreamer creates the video window at its default size. This resizes it to
+// match the iPhone's physical screen aspect ratio so the mirror looks correct.
+
+const IPHONE_PRO = { w: 390, h: 844 };
+
+export function resizeIosMirrorWindow(): boolean {
+    if (iosMirrorHwnd === null) {
+        iosMirrorHwnd = findIosMirrorWindow();
+        if (iosMirrorHwnd === null) return false;
+    }
+    try {
+        const { w, h } = IPHONE_PRO;
+        const ok = SetWindowPos(iosMirrorHwnd, HWND_TOP, 0, 0, w, h, SWP_NOMOVE | SWP_NOACTIVATE);
+        if (ok) {
+            console.log('[ios-mirror] resized window to', w, 'x', h);
+        }
+        return ok;
+    } catch (e) {
+        console.error('[ios-mirror] resize failed:', e);
+        return false;
+    }
 }
