@@ -35,6 +35,9 @@ extraResources:
     to: scrcpy
   - from: resources/ios
     to: ios
+    filter:
+      - "**/*"
+      - "!.venv/**"
 
 asarUnpack:
   - "**/*.node"

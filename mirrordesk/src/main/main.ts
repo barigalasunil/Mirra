@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, nativeImage, screen, Menu } from 'electron';
-import { spawn, execFile } from 'child_process';
+import { spawn, execFile, execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { networkInterfaces } from 'os';
@@ -41,43 +41,53 @@ function ensureFirewallRules(): void {
     if (firewallChecked || process.platform !== 'win32') return;
     firewallChecked = true;
 
-    const checkRule = (ruleName: string): Promise<boolean> =>
-        new Promise(resolve => {
-            execFile('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${ruleName}`], { windowsHide: true }, (err, stdout) => {
-                resolve(!err && stdout.includes(ruleName));
-            });
-        });
+    const checkRule = (ruleName: string): boolean => {
+        try {
+            const out = execSync(
+                `netsh advfirewall firewall show rule name="${ruleName}"`,
+                { windowsHide: true, timeout: 5000 }
+            ).toString();
+            return out.includes(ruleName);
+        } catch {
+            return false;
+        }
+    };
 
-    const addRule = (ruleName: string, protocol: string, ports: string): Promise<boolean> =>
-        new Promise(resolve => {
-            execFile('netsh', [
-                'advfirewall', 'firewall', 'add', 'rule',
-                `name=${ruleName}`, 'dir=in', 'action=allow',
-                `protocol=${protocol}`, `localport=${ports}`
-            ], { windowsHide: true }, (err) => resolve(!err));
-        });
+    const addRuleElevated = (ruleName: string, protocol: string, ports: string): boolean => {
+        const netshCmd = `netsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=${protocol} localport=${ports}`;
+        const psCmd = `Start-Process -FilePath netsh -ArgumentList 'advfirewall firewall add rule name=\\"${ruleName}\\" dir=in action=allow protocol=${protocol} localport=${ports}' -Verb RunAs -WindowStyle Hidden -Wait`;
+        try {
+            execSync(psCmd, { windowsHide: true, timeout: 15000 });
+            return true;
+        } catch {
+            return false;
+        }
+    };
 
     (async () => {
-        const tcpExists = await checkRule(`${AIRPLAY_RULE_NAME} TCP`);
-        const udpExists = await checkRule(`${AIRPLAY_RULE_NAME} UDP`);
+        const tcpExists = checkRule(`${AIRPLAY_RULE_NAME} TCP`);
+        const udpExists = checkRule(`${AIRPLAY_RULE_NAME} UDP`);
 
         if (tcpExists && udpExists) {
             console.log('[firewall] AirPlay rules already exist');
             return;
         }
 
+        let created = false;
         if (!tcpExists) {
-            const ok = await addRule(`${AIRPLAY_RULE_NAME} TCP`, 'TCP', '7000-7002');
-            console.log('[firewall] TCP rule:', ok ? 'created' : 'failed (may need admin)');
+            const ok = addRuleElevated(`${AIRPLAY_RULE_NAME} TCP`, 'TCP', '7000-7002');
+            console.log('[firewall] TCP rule:', ok ? 'created' : 'failed');
+            if (ok) created = true;
         }
         if (!udpExists) {
-            const ok = await addRule(`${AIRPLAY_RULE_NAME} UDP`, 'UDP', '7000-7002');
-            console.log('[firewall] UDP rule:', ok ? 'created' : 'failed (may need admin)');
+            const ok = addRuleElevated(`${AIRPLAY_RULE_NAME} UDP`, 'UDP', '7000-7002');
+            console.log('[firewall] UDP rule:', ok ? 'created' : 'failed');
+            if (ok) created = true;
         }
 
-        if (!tcpExists || !udpExists) {
+        if (!created && (!tcpExists || !udpExists)) {
             mainWindow?.webContents.send('ios:mirror-instruction', {
-                msg: 'If iPhone cannot connect: run as Administrator once, or allow Mirra in Windows Firewall'
+                msg: 'Windows Firewall blocked AirPlay ports. Please allow Mirra when prompted, or run as Administrator once.'
             });
         }
     })();
@@ -102,15 +112,15 @@ if (!gotLock) {
 }
 
 const getAdbPath = () => {
-    return isDev
-        ? path.join(__dirname, '../../resources/scrcpy/adb.exe')
-        : path.join(process.resourcesPath, 'scrcpy', 'adb.exe');
+    return app.isPackaged
+        ? path.join(process.resourcesPath, 'scrcpy', 'adb.exe')
+        : path.join(__dirname, '../../resources/scrcpy/adb.exe');
 };
 
 const getScrcpyPath = () => {
-    return isDev
-        ? path.join(__dirname, '../../resources/scrcpy/scrcpy.exe')
-        : path.join(process.resourcesPath, 'scrcpy', 'scrcpy.exe');
+    return app.isPackaged
+        ? path.join(process.resourcesPath, 'scrcpy', 'scrcpy.exe')
+        : path.join(__dirname, '../../resources/scrcpy/scrcpy.exe');
 };
 
 async function loadWithRetry(win: BrowserWindow, url: string, maxRetries = 15, delayMs = 300) {
@@ -787,9 +797,10 @@ ipcMain.handle('menu:show-context', async (_e, opts: { isWifiConnected?: boolean
 
 // iOS: UxPlay AirPlay mirroring
 function getUxplayPath(): string {
-    return isDev
-        ? path.join(__dirname, '../../resources/ios/uxplay.exe')
-        : path.join(process.resourcesPath, 'ios', 'uxplay.exe');
+    const base = app.isPackaged
+        ? process.resourcesPath
+        : path.join(__dirname, '..', '..', 'resources');
+    return path.join(base, 'ios', 'uxplay.exe');
 }
 
 function killUxplay(): void {
