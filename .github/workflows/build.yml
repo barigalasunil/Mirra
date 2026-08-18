@@ -13,6 +13,9 @@ on:
         type: choice
         options: [all, combined, android, ios]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -50,57 +53,26 @@ jobs:
         run: npx vite build
 
       - name: Build Combined (Android + iOS)
-        if: >
-          github.event.inputs.flavour == 'all' ||
-          github.event.inputs.flavour == 'combined' ||
-          github.event.inputs.flavour == ''
         working-directory: mirrordesk
         run: npx electron-builder --config electron-builder.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Android only
-        if: >
-          github.event.inputs.flavour == 'all' ||
-          github.event.inputs.flavour == 'android' ||
-          github.event.inputs.flavour == ''
-        working-directory: mirrordesk
-        run: npx electron-builder --config electron-builder.android.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build iOS only
-        if: >
-          github.event.inputs.flavour == 'all' ||
-          github.event.inputs.flavour == 'ios' ||
-          github.event.inputs.flavour == ''
-        working-directory: mirrordesk
-        run: npx electron-builder --config electron-builder.ios.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Combined artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: mirra-combined
           path: mirrordesk/release/combined/*.exe
-          if-no-files-found: ignore
+          if-no-files-found: error
 
-      - name: Upload Android artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: mirra-android
-          path: mirrordesk/release/android/*.exe
-          if-no-files-found: ignore
+      - name: Delete existing release if present
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        run: gh release delete "${{ github.ref_name }}" --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload iOS artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: mirra-ios
-          path: mirrordesk/release/ios/*.exe
-          if-no-files-found: ignore
-
-      - name: Create GitHub Release with all EXEs
+      - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
@@ -108,32 +80,16 @@ jobs:
           body: |
             ## Mirra ${{ github.ref_name }}
 
-            Download the version that fits your needs:
+            | File | Platform |
+            |------|----------|
+            | `Mirra-*-portable.exe` | Android + iOS |
+            | `Mirra-*-setup.exe` | Android + iOS (installer) |
 
-            | File | Platform | Size |
-            |------|----------|------|
-            | `Mirra-*-portable.exe` | Android + iOS | ~200MB |
-            | `Mirra-Android-*-portable.exe` | Android only | ~80MB |
-            | `Mirra-iOS-*-portable.exe` | iOS only | ~120MB |
-
-            ### How to install
-            - **Portable**: just double-click, no installation needed
-            - **Setup**: run the installer, follow the wizard
-
-            ### Android requirements
-            - USB Debugging enabled on your Android device
+            ### Requirements
             - Windows 10/11 64-bit
-
-            ### iOS requirements  
-            - iPhone and PC on the **same Wi-Fi network**
-            - iTunes installed (Microsoft Store)
-            - Open Control Center → Screen Mirroring → **Mirra**
-
-            > ⏱ First launch takes 5-10 seconds — this is normal.
-          files: |
-            mirrordesk/release/combined/*.exe
-            mirrordesk/release/android/*.exe
-            mirrordesk/release/ios/*.exe
+            - **Android**: USB Debugging enabled
+            - **iOS**: iPhone and PC on same Wi-Fi, iTunes installed, Screen Mirroring → Mirra
+          files: mirrordesk/release/combined/*.exe
           draft: false
           prerelease: false
         env:
