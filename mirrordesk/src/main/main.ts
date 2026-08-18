@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, nativeImage, screen, Menu } from 'electron';
-import { spawn, execFile, execSync } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { networkInterfaces } from 'os';
@@ -54,7 +54,6 @@ function ensureFirewallRules(): void {
     };
 
     const addRuleElevated = (ruleName: string, protocol: string, ports: string): boolean => {
-        const netshCmd = `netsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=${protocol} localport=${ports}`;
         const psCmd = `Start-Process -FilePath netsh -ArgumentList 'advfirewall firewall add rule name=\\"${ruleName}\\" dir=in action=allow protocol=${protocol} localport=${ports}' -Verb RunAs -WindowStyle Hidden -Wait`;
         try {
             execSync(psCmd, { windowsHide: true, timeout: 15000 });
