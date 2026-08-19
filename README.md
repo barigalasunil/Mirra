@@ -1,136 +1,310 @@
-# Mirra
+<div align="center">
 
-Mirra is a desktop app (Electron) that mirrors and controls an Android device on your computer by streaming the device's H.264 screen over a WebSocket and decoding it with WebCodecs (or MSE). Built on a vendored fork of [scrcpy](https://github.com/Genymobile/scrcpy).
+<img src="mirrordesk/resources/scrcpy/icon.png" alt="Mirra Logo" width="100" height="100" />
 
-> The active custom work lives in [`mirrordesk/`](mirrordesk/) — an Electron + React app. The rest of the repo is a vendored scrcpy v4.0 tree (C client + Java Android server) that provides the foundation.
+# Mirra 🪞
 
-## Overview
+**Free, open-source Android & iOS screen mirroring for Windows**
 
-AndroMirror is a work-in-progress desktop app for Android mirroring that takes a different decoding path than the classic scrcpy (OpenGL/SDL). Instead of rendering the video stream natively in C, an Electron main process bridges an ADB-forwarded TCP socket from the device to a WebSocket server, and the React renderer decodes the raw H.264 Annex-B NAL stream in the browser using the **WebCodecs** API (with a **Media Source Extensions** fallback). Device input (touch / scroll / keys) is sent back through the same WebSocket to the device's `scrcpy` control socket.
+Mirror your phone, take screenshots, record your screen — all from a sleek floating toolbar.
 
-The app uses a [ws-scrcpy](https://github.com/NetrisTV/ws-scrcpy)-style **forked server** (`scrcpy-server.jar`) that serves a single raw stream socket on TCP port `8886`, instead of the standard scrcpy server's dual abstract sockets. This is an experimental prototype — the mirroring pipeline is under active debugging (see [Status](#status)).
+[![GitHub release](https://img.shields.io/github/v/release/barigalasunil/Mirra?color=blue&label=Download&style=for-the-badge)](https://github.com/barigalasunil/Mirra/releases/latest)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey?style=for-the-badge&logo=windows)](https://github.com/barigalasunil/Mirra/releases/latest)
+[![Stars](https://img.shields.io/github/stars/barigalasunil/Mirra?style=for-the-badge&color=yellow)](https://github.com/barigalasunil/Mirra/stargazers)
 
-## Tech Stack
+---
 
-- **scrcpy fork** — [scrcpy v4.0](https://github.com/Genymobile/scrcpy) source tree
-  - **C client** (Meson / Ninja build, FFmpeg + SDL2) in [`app/`](app/)
-  - **Android server** (Java, Gradle + AGP 9.1, minSdk 21 / targetSdk 36) in [`server/`](server/)
-  - **ws-scrcpy forked server** binary (`scrcpy-server.jar`) bundled in [`mirrordesk/resources/scrcpy/`](mirrordesk/resources/scrcpy/)
-- **MirrorDesk app** (`mirrordesk/`)
-  - TypeScript, **Electron 42**, **React 19**, **Vite 8**
-  - **Tailwind CSS** UI, **lucide-react** icons, `clsx`/`tailwind-merge`
-  - **`ws`** WebSocket server in the main process, **`electron-store`** for persistence
-  - `h264-converter`, `electron-builder` (NSIS Windows installer)
-  - Video decoding: **WebCodecs** (`VideoDecoder`) primary, **MSE** (`MediaSource`/`SourceBuffer`) fallback
+[📥 Download](#-download) • [🚀 Quick Start](#-quick-start) • [📱 Android Setup](#-android-setup) • [🍎 iOS Setup](#-ios-setup) • [🔨 Build from Source](#-build-from-source) • [❓ FAQ](#-faq)
 
-## Features
+</div>
 
-From the app code (`mirrordesk/`):
+---
 
-- **Device discovery** over ADB — lists connected devices (USB and Wi-Fi) with model, battery level, connection type, and IP (`main.ts` IPC `adb:devices` / `adb:device-status`)
-- **Wi-Fi connection** — connect to an IP:port, auto-discover the device's IP, and enable wireless debugging via `adb tcpip 5555`
-- **Real-time mirroring** — WebSocket bridge forwards the raw H.264 stream; decoded via WebCodecs onto a canvas (MSE fallback for browsers/run-times without WebCodecs)
-- **Interactive control** — touch / scroll / key input is serialized (`control/ControlMessage.ts`) and forwarded back to the device control socket
-- **Streaming settings** — resolution (Original/1440p/1080p/720p/480p), video bitrate, and frame-rate presets
-- **Screenshot** — capture, then copy to clipboard or save via a save dialog
-- **Keep-awake** toggle (`settings put global stay_on_while_plugged_in`)
-- **Auto-reconnect** with bounded retry (up to 5 attempts) when the device socket drops
-- **Stream diagnostics panel** — live NAL-unit counts (SPS/PPS/IDR/SEI), decoder state, bytes/sec, WebSocket state, and a downloadable `.h264` stream dump for debugging
-- **Dark / light theme**, persisted window size and settings (`electron-store`)
-- An **Annex-B NAL stream parser** (`StreamParser.ts`) that splits the byte stream into NAL units by 3/4-byte start codes, used by both players
+## ✨ What is Mirra?
 
-## Project Structure
+Mirra is a lightweight Windows desktop app that lets you **mirror and control your Android or iOS device** directly on your PC — no subscription, no ads, completely free.
 
+It sits as a compact **floating toolbar** beside your phone's mirrored screen, giving you one-click access to screenshots, screen recording, and device controls. Think Vysor Pro, but open-source.
+
+<div align="center">
+
+| | Android | iOS |
+|:--|:---:|:---:|
+| 🖥 Screen Mirroring | ✅ | ✅ AirPlay |
+| 📸 Screenshot (Copy / Save) | ✅ | ✅ |
+| 🎥 Screen Recording (MP4) | ✅ | 🔜 |
+| ☀️ Keep Screen Awake | ✅ | — |
+| 📶 Wi-Fi Connect | ✅ | ✅ Same network |
+| 📌 Always-on-top toolbar | ✅ | ✅ |
+| 🔌 USB + Wireless | ✅ | Wi-Fi only |
+
+</div>
+
+---
+
+## 🎬 Video Tutorials
+
+### Android — Getting Started
+
+> 📺 **Tutorial coming soon** — [Subscribe to be notified](https://github.com/barigalasunil/Mirra)
+>
+> `[Android Tutorial Video Placeholder]`
+>
+> <!-- How to add your YouTube video when ready:
+> 1. Upload your tutorial to YouTube
+> 2. Replace YOUR_VIDEO_ID with your actual video ID (the part after ?v=)
+> 3. Remove the comment markers around the two lines below
+> [![Android Tutorial](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+> *▶ Click to watch: Mirra Android Setup & Screen Mirroring Tutorial*
+> -->
+
+### iOS — AirPlay Mirroring
+
+> 📺 **Tutorial coming soon** — [Subscribe to be notified](https://github.com/barigalasunil/Mirra)
+>
+> `[iOS Tutorial Video Placeholder]`
+>
+> <!-- How to add your YouTube video when ready:
+> 1. Upload your tutorial to YouTube
+> 2. Replace YOUR_VIDEO_ID with your actual video ID
+> 3. Remove the comment markers around the two lines below
+> [![iOS Tutorial](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+> *▶ Click to watch: Mirra iOS AirPlay Mirroring Tutorial*
+> -->
+
+---
+
+## 📥 Download
+
+Go to the **[Releases page](https://github.com/barigalasunil/Mirra/releases/latest)** and pick the right file:
+
+| File | Best for | Size |
+|------|----------|------|
+| `Mirra-portable.exe` | Android + iOS, no install needed | ~200 MB |
+| `Mirra-Setup.exe` | Android + iOS, with Start Menu shortcut | ~200 MB |
+| `Mirra-Android-portable.exe` | Android only, smaller download | ~80 MB |
+| `Mirra-iOS-portable.exe` | iPhone only | ~120 MB |
+
+> ⚠️ **Important:** Download the `.exe` directly from the **Releases page** — not from the Actions tab.
+> The portable `.exe` runs directly — no installation, no admin rights needed. Just double-click.
+
+---
+
+## 🚀 Quick Start
+
+### Option A — Portable (recommended)
+1. Download `Mirra-portable.exe` from [Releases](https://github.com/barigalasunil/Mirra/releases/latest)
+2. Double-click to launch — no installation needed
+3. Connect your device (USB for Android, Wi-Fi for iOS)
+4. Click **▶ Start Mirroring**
+
+### Option B — Installer
+1. Download `Mirra-Setup.exe` from [Releases](https://github.com/barigalasunil/Mirra/releases/latest)
+2. Run the installer and follow the steps
+3. Launch Mirra from your Desktop or Start Menu shortcut
+
+> ⏱ **First launch takes 5–10 seconds** for the toolbar icons to appear. This is a known limitation of the current build. The app is fully functional once icons load — subsequent interactions are instant.
+
+---
+
+## 📱 Android Setup
+
+### Step 1 — Enable USB Debugging
+
+1. Open **Settings** on your Android phone
+2. Go to **About Phone**
+3. Tap **Build Number** 7 times until you see *"You are now a developer!"*
+4. Go back to **Settings → Developer Options**
+5. Enable **USB Debugging**
+
+> Can't find Developer Options? Try Settings → Software Information → Build Number.
+
+### Step 2 — Connect & Mirror
+
+1. Plug your phone into your PC via **USB cable**
+2. Tap **"Allow"** on the USB Debugging prompt on your phone
+3. Open Mirra — your device appears automatically in the toolbar
+4. Click **▶ Start Mirroring**
+
+The mirror window opens alongside the toolbar. Use your mouse to interact with the device.
+
+### Wireless Mirror (same Wi-Fi)
+
+1. Connect via USB first (one time only)
+2. Click **⋮ → Connect via Wi-Fi**
+3. Click **Auto-discover IP** or enter your phone's IP manually
+4. Click Connect — unplug the cable and continue wirelessly
+
+---
+
+## 🍎 iOS Setup (AirPlay)
+
+iOS mirroring uses Apple's built-in AirPlay — **no jailbreak, no app install on your iPhone.**
+
+### Requirements
+
+- ✅ iPhone and PC on the **same Wi-Fi network**
+- ✅ [iTunes](https://apps.microsoft.com/detail/9pb2mz1zmb0s) installed on Windows
+- ✅ iOS 12 or later
+
+### Step 1 — Prepare Windows
+1. Install **iTunes** from the [Microsoft Store](https://apps.microsoft.com/detail/9pb2mz1zmb0s)
+2. Open iTunes once to complete driver installation
+
+### Step 2 — Start iOS Mirroring
+1. Open Mirra
+2. Click **▶ Start iOS Mirror**
+3. Allow Mirra through **Windows Firewall** when prompted ← important!
+4. Wait for the toast: *"On your iPhone: Control Center → Screen Mirroring → Mirra"*
+
+### Step 3 — Connect from iPhone
+1. Swipe down from the top-right corner to open **Control Center**
+2. Tap **Screen Mirroring** (rectangle with triangle icon)
+3. Select **"Mirra"** from the list
+4. Your iPhone screen appears on your PC ✅
+
+### iOS Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| "Mirra" not in AirPlay list | Confirm same Wi-Fi. Toggle Wi-Fi off/on on iPhone. |
+| Black screen after connecting | Tap Screen Mirroring → Mirra again to reconnect |
+| Need to reconnect every time | Click Stop iOS Mirror → Start iOS Mirror → reconnect from iPhone |
+| Firewall blocked | Run PowerShell fix below |
+| Still not visible | Restart router, or test with iPhone mobile hotspot |
+
+**Firewall fix (PowerShell as Administrator):**
+```powershell
+netsh advfirewall firewall add rule name="Mirra-UxPlay" dir=in action=allow protocol=any program="C:\Path\To\uxplay.exe"
 ```
-AndroMirror/
-├── mirrordesk/              # ★ The actual app (Electron + React + Vite)
-│   ├── src/main/            # Electron main process
-│   │   ├── main.ts          # Window, ADB IPC handlers, settings store
-│   │   ├── scrcpy-ws.ts     # WebSocket server ↔ ADB-forwarded device bridge
-│   │   └── preload.ts       # contextBridge API surface
-│   ├── src/renderer/        # React UI (Tailwind)
-│   │   ├── components/MirrorView.tsx  # WS client, stream diagnostics UI
-│   │   ├── player/          # WebCodecsPlayer, MsePlayer, StreamParser (NAL parser)
-│   │   └── control/         # ControlMessage + touch/scroll/key serializers
-│   ├── src/shared/types.ts  # Shared TS types (device, settings, control)
-│   ├── resources/scrcpy/    # Bundled adb.exe + forked scrcpy-server.jar
-│   ├── download.ps1         # Fetches scrcpy win64 tools into resources/
-│   └── electron-builder.yml # NSIS packaging config
-├── app/                     # Vendored scrcpy C client (Meson build)
-├── server/                  # Vendored scrcpy Android server (Gradle build)
-├── config/                  # Checkstyle config for the server
-├── doc/                     # Upstream scrcpy documentation (build.md, etc.)
-├── release/                 # Upstream release/packaging scripts
-├── meson.build              # scrcpy client build entry
-├── build.gradle             # Root Gradle config (server module)
-└── run                      # Helper: ./run BUILDDIR <scrcpy options>
-```
 
-## Getting Started
+---
 
-### MirrorDesk (Electron app) — the primary way to run this
+## 📸 Screenshot
 
-Prerequisites: Node.js (with npm). Windows is the target platform (electron-builder NSIS, bundled `adb.exe`).
+Click the **📷 camera icon** any time. A popup appears on the mirror window with:
+
+- **Copy Image** — copies to clipboard (paste into WhatsApp, Slack, email...)
+- **Save As…** — file save dialog, saves as PNG to your chosen location
+
+> Android screenshots work even without an active mirror session.
+
+---
+
+## 🎥 Screen Recording (Android)
+
+1. Start mirroring first
+2. Click the **⏺ record icon**
+3. A **save dialog appears before recording starts** — choose file name and folder
+4. Recording begins — mirroring continues uninterrupted
+5. Click **⏹ stop** — MP4 saved, folder opens automatically
+
+**Quality:** H.264 · MP4 · 8 Mbps · 60 fps · 1080p max
+
+> iOS screen recording is planned for a future release.
+
+---
+
+## ⚙️ Controls Reference
+
+| Icon | Action | Notes |
+|------|--------|-------|
+| ▶ / ⏹ | Start / Stop Mirroring | Opens the mirror window |
+| 📷 | Screenshot | Copy or Save popup |
+| ⏺ / ⏹ | Start / Stop Recording | Android only · save dialog first |
+| ☀️ | Keep Awake | Prevents screen sleeping while connected |
+| 📌 | Pin on top | Toolbar stays above all windows |
+| ⋮ | More options | Wi-Fi · Theme · Dev Tools |
+
+---
+
+## 🔨 Build from Source
+
+### Prerequisites
+- [Node.js 18+](https://nodejs.org/) · npm 9+ · Git · Windows 10/11 64-bit
+
+### Steps
 
 ```bash
-cd mirrordesk
-npm install
-
-# Fetch scrcpy tools (adb.exe, DLLs) into resources/scrcpy/ if not already present:
-powershell -ExecutionPolicy Bypass -File download.ps1
+git clone https://github.com/barigalasunil/Mirra.git
+cd Mirra
+npm run install-app   # install dependencies
+npm run dev           # development mode
+npm run build         # Android + iOS combined
+npm run build:android # Android only
+npm run build:ios     # iOS only
+npm run build:all     # all three flavours
 ```
 
-Run in development:
-
-```bash
-npm run dev
+### Build outputs
+```
+mirrordesk/
+├── release/combined/   →  Mirra-*-portable.exe  +  Mirra-*-setup.exe
+├── release/android/    →  Mirra-Android-*-portable.exe  +  setup
+└── release/ios/        →  Mirra-iOS-*-portable.exe  +  setup
 ```
 
-This starts the Vite renderer (port 5173) and Electron main process. Plug in an Android device with USB debugging enabled (or connect over Wi-Fi), select it, and click **Start Mirroring**.
+---
 
-Build an installer:
+## ❓ FAQ
 
-```bash
-npm run build          # tsc (main + renderer) → vite build → electron-builder (NSIS)
-```
+**Q: Is Mirra free?**
+Yes — free forever, no ads, no subscription, Apache 2.0 open-source.
 
-> The app expects `adb.exe` and `scrcpy-server.jar` in `resources/scrcpy/`. The checked-in `scrcpy-server.jar` (114 KB) is the ws-scrcpy fork; `adb.exe` can be refreshed with `download.ps1`.
+**Q: Does it need internet?**
+No. Mirroring is fully local — USB or home Wi-Fi only.
 
-### Building the vendored scrcpy (optional, from source)
+**Q: Why 5–10 seconds on first launch?**
+The current build starts a local server on first run. Will be improved in a future release.
 
-The classic scrcpy client/server build still works as upstream:
+**Q: Can I control my Android from the PC?**
+Yes — mouse clicks become touch events. iOS is view-only (AirPlay limitation).
 
-```bash
-# Client (C):
-meson setup build-auto --buildtype=release
-ninja -C build-auto
-# Run: ./run build-auto -m1024
+**Q: Windows Defender flags the exe.**
+False positive. Click "More info → Run anyway." Build from source to verify.
 
-# Server (Java): produces server/build/outputs/apk/release/server-release-unsigned.apk
-./gradlew -p server assembleRelease
-```
+**Q: iPhone detected but won't mirror.**
+Click "Start iOS Mirror" first, then use Control Center → Screen Mirroring on iPhone.
 
-See [`doc/build.md`](doc/build.md) for full system-specific instructions.
+---
 
-## Usage
+## 🛡 Credits & Licenses
 
-1. Launch the app (or run `npm run dev`).
-2. With a device selected, click **Start Mirroring**.
-3. The toolbar shows battery, connection type (USB/Wi-Fi), and IP.
-4. The on-screen diagnostics panel exposes live stream stats and lets you switch between the WebCodecs and MSE players or download a raw `.h264` dump.
-5. Use **Screenshot**, **Keep Awake**, and the **Settings** panel (resolution / bitrate / FPS) from the toolbar.
+| Project | Author | License | Used for |
+|---------|--------|---------|----------|
+| [scrcpy](https://github.com/Genymobile/scrcpy) | Genymobile / Romain Vimont | Apache 2.0 | Android mirroring |
+| [UxPlay](https://github.com/FDH2/UxPlay) | FDH2 | GPL 3.0 | iOS AirPlay receiver |
+| [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) | doronz88 | GPL 3.0 | iOS device detection |
+| [Electron](https://www.electronjs.org) | OpenJS Foundation | MIT | Desktop framework |
+| [React](https://react.dev) | Meta | MIT | UI |
+| [Tailwind CSS](https://tailwindcss.com) | Tailwind Labs | MIT | Styling |
+| [Lucide](https://lucide.dev) | Lucide Contributors | ISC | Icons |
 
-## Status
+---
 
-**Experimental / work-in-progress.** The git history is short (4 commits, all on 2026-05-25) and reads like a debugging session:
+## 🤝 Contributing
 
-- `f00185c` initial import of scrcpy v4.0 + MirrorDesk app ("Fix blank mirroring…")
-- `68650c4` "Switch to ws-scrcpy forked server protocol"
-- `2adeab7` "Fix blank screen: Annex-B stream parser + decoder config timing"
-- `a9ea824` "Fix server path: use scrcpy-server.jar (ws-scrcpy fork)"
+1. Fork the repo
+2. Create your branch: `git checkout -b feature/my-feature`
+3. Commit: `git commit -m 'feat: add my feature'`
+4. Push: `git push origin feature/my-feature`
+5. Open a Pull Request
 
-Heavy debug instrumentation remains throughout (`console.log` per NAL/frame, hex dumps, downloadable stream dumps, live diagnostics overlays), the app version is `0.0.0`, and the mirroring pipeline was still being stabilized at the last commit. The vendored scrcpy tree is unmodified upstream code; **audio and the other advanced upstream scrcpy features are not wired into MirrorDesk** (video-only streaming, H.264).
+---
 
-## License
+## 📬 Support
 
-Apache License 2.0 — see [LICENSE](LICENSE). scrcpy is Copyright (C) 2018 Genymobile and 2018-2026 Romain Vimont.
+- 🐛 **Bugs** → [Open an Issue](https://github.com/barigalasunil/Mirra/issues/new)
+- 💡 **Feature requests** → [Open an Issue](https://github.com/barigalasunil/Mirra/issues/new)
+- ⭐ **Find Mirra useful?** → [Give it a star!](https://github.com/barigalasunil/Mirra/stargazers)
+
+---
+
+<div align="center">
+
+Made with ❤️ by [Sunil Barigala](https://github.com/barigalasunil)
+
+[Apache 2.0 License](LICENSE) · Powered by [scrcpy](https://github.com/Genymobile/scrcpy) & [UxPlay](https://github.com/FDH2/UxPlay)
+
+</div>
