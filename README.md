@@ -31,13 +31,13 @@ It sits as a compact **floating toolbar** beside your phone's mirrored screen, g
 
 | | Android | iOS |
 |:--|:---:|:---:|
-| 🖥 Screen Mirroring | ✅ | ✅ AirPlay |
+| 🖥 Screen Mirroring | ✅ | 🔜 |
 | 📸 Screenshot (Copy / Save) | ✅ | 🔜 |
 | 🎥 Screen Recording (MP4) | ✅ | 🔜 |
 | ☀️ Keep Screen Awake | ✅ | — |
-| 📶 Wi-Fi Connect | ✅ | ✅ Same network |
-| 📌 Always-on-top toolbar | ✅ | ✅ |
-| 🔌 USB + Wireless | ✅ | Wi-Fi only |
+| 📶 Wi-Fi Connect | ✅ | 🔜 |
+| 📌 Always-on-top toolbar | ✅ | 🔜 |
+| 🔌 USB + Wireless | ✅ | 🔜 |
 
 </div>
 
