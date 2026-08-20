@@ -47,17 +47,8 @@ It sits as a compact **floating toolbar** beside your phone's mirrored screen, g
 
 ### Android — Getting Started
 
-> 📺 **Tutorial coming soon** — [Subscribe to be notified](https://github.com/barigalasunil/Mirra)
->
-> `[Android Tutorial Video Placeholder]`
->
-> <!-- How to add your YouTube video when ready:
-> 1. Upload your tutorial to YouTube
-> 2. Replace YOUR_VIDEO_ID with your actual video ID (the part after ?v=)
-> 3. Remove the comment markers around the two lines below
-> [![Android Tutorial](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
-> *▶ Click to watch: Mirra Android Setup & Screen Mirroring Tutorial*
-> -->
+[![Android Tutorial](https://img.youtube.com/vi/H4BXdJYdOlg/maxresdefault.jpg)](https://youtube.com/shorts/H4BXdJYdOlg)
+*▶ Click to watch: Mirra Android Setup & Screen Mirroring Tutorial*
 
 ### iOS — AirPlay Mirroring
 
