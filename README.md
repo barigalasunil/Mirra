@@ -35,7 +35,7 @@ It sits as a compact **floating toolbar** beside your phone's mirrored screen, g
 | 📸 Screenshot (Copy / Save) | ✅ | 🔜 |
 | 🎥 Screen Recording (MP4) | ✅ | 🔜 |
 | ☀️ Keep Screen Awake | ✅ | — |
-| 📶 Wi-Fi Connect | ✅ | 🔜 |
+| 📶 Wi-Fi Connect | 🔜 Coming soon | 🔜 |
 | 📌 Always-on-top toolbar | ✅ | 🔜 |
 | 🔌 USB + Wireless | ✅ | 🔜 |
 
@@ -120,12 +120,10 @@ Go to the **[Releases page](https://github.com/barigalasunil/Mirra/releases/late
 
 The mirror window opens alongside the toolbar. Use your mouse to interact with the device.
 
-### Wireless Mirror (same Wi-Fi)
+### Wireless Mirror (Coming Soon)
 
-1. Connect via USB first (one time only)
-2. Click **⋮ → Connect via Wi-Fi**
-3. Click **Auto-discover IP** or enter your phone's IP manually
-4. Click Connect — unplug the cable and continue wirelessly
+Wi-Fi mirroring for Android is planned for a future release.
+For now, please use a USB cable to connect your Android device.
 
 ---
 
@@ -206,7 +204,7 @@ Click the **📷 camera icon** any time. A popup appears on the mirror window wi
 | ⏺ / ⏹ | Start / Stop Recording | Android only · save dialog first |
 | ☀️ | Keep Awake | Prevents screen sleeping while connected |
 | 📌 | Pin on top | Toolbar stays above all windows |
-| ⋮ | More options | Wi-Fi · Theme · Dev Tools |
+| ⋮ | More options | Quick Screenshot · Theme · Dev Tools |
 
 ---
 
@@ -251,6 +249,9 @@ The current build starts a local server on first run. Will be improved in a futu
 
 **Q: Can I control my Android from the PC?**
 Yes — mouse clicks become touch events. iOS is view-only (AirPlay limitation).
+
+**Q: Can I mirror Android over Wi-Fi?**
+Not yet in the current UI — USB only for now. Wi-Fi support is planned.
 
 **Q: Windows Defender flags the exe.**
 False positive. Click "More info → Run anyway." Build from source to verify.

@@ -113,10 +113,9 @@ export interface ElectronAPI {
     setAlwaysOnTop: (value: boolean) => Promise<{ success: boolean; value: boolean }>;
     getAlwaysOnTop: () => Promise<boolean>;
     closeWindow: () => Promise<void>;
-    toggleDevTools: () => Promise<void>;
 
-    // More-options native context menu
-    showContextMenu: (opts: { theme: string; alwaysOnTop: boolean }) => Promise<void>;
-    onMenuAction: (callback: (action: string) => void) => void;
-    removeMenuAction: () => void;
+    // Theme (one-way flow: main process owns state, renderer applies)
+    requestThemeToggle: () => Promise<string>;
+    onThemeChanged: (callback: (newTheme: string) => void) => void;
+    removeThemeChanged: () => void;
 }

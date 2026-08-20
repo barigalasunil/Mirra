@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     adbDiscoverIp: (deviceId: string) => ipcRenderer.invoke('adb:discover-ip', deviceId),
     adbKeepAwake: (deviceId: string, state: boolean) => ipcRenderer.invoke('adb:keep-awake', deviceId, state),
     adbScreenshot: (deviceId: string) => ipcRenderer.invoke('adb:screenshot', deviceId),
+    longScreenshot: (deviceId: string) => ipcRenderer.invoke('adb:long-screenshot', deviceId),
 
     iosDevices: () => ipcRenderer.invoke('ios:devices'),
     iosScreenshot: (udid: string) => ipcRenderer.invoke('ios:screenshot', udid),
@@ -71,6 +72,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     
     storeGet: (key: string, def?: any) => ipcRenderer.invoke('store:get', key, def),
     storeSet: (key: string, val: any) => ipcRenderer.invoke('store:set', key, val),
+
+    getQuickScreenshotMode: () => ipcRenderer.invoke('settings:get-quick-screenshot'),
+    setQuickScreenshotMode: (val: boolean) => ipcRenderer.invoke('settings:set-quick-screenshot', val),
+
+    onToast: (callback: (data: { msg: string; type?: 'success' | 'error' | 'info' }) => void) => {
+        ipcRenderer.on('toast', (_e, data) => callback(data));
+    },
+    removeToast: () => ipcRenderer.removeAllListeners('toast'),
     
     scrcpyStart: (deviceId: string) => ipcRenderer.invoke('scrcpy:start', deviceId),
     scrcpyStop: () => ipcRenderer.invoke('scrcpy:stop'),
@@ -79,13 +88,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setAlwaysOnTop: (value: boolean) => ipcRenderer.invoke('window:set-always-on-top', value),
     getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
     closeWindow: () => ipcRenderer.invoke('window:close'),
-    toggleDevTools: () => ipcRenderer.invoke('window:toggle-devtools'),
 
-    showContextMenu: (opts: { theme: string; alwaysOnTop: boolean }) => ipcRenderer.invoke('menu:show-context', opts),
-    onMenuAction: (callback: (action: string) => void) => {
-        ipcRenderer.on('menu:action', (_e, action) => callback(action));
+    requestThemeToggle: () => ipcRenderer.invoke('theme:toggle'),
+    onThemeChanged: (callback: (newTheme: string) => void) => {
+        ipcRenderer.on('theme:changed', (_e, newTheme) => callback(newTheme));
     },
-    removeMenuAction: () => ipcRenderer.removeAllListeners('menu:action'),
+    removeThemeChanged: () => ipcRenderer.removeAllListeners('theme:changed'),
 
     onScrcpyStopped: (callback: () => void) => {
         ipcRenderer.on('scrcpy:stopped', () => callback());

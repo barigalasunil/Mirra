@@ -169,6 +169,22 @@ function findIosMirrorWindow(): number | null {
     }
 }
 
+// Raise the iOS mirror window by title. GStreamer d3d11videosink creates
+// the video window under a different PID than the UxPlay process, so
+// PID-based EnumWindows never finds it. Title-based FindWindowW works.
+export function raiseIosMirrorWindow(): boolean {
+    const h = findIosMirrorWindow();
+    if (h === null) return false;
+    try {
+        ShowWindow(h, SW_RESTORE);
+        SetWindowPos(h, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        SetForegroundWindow(h);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 function refreshIos() {
     if (iosMirrorHwnd === null) {
         iosMirrorHwnd = findIosMirrorWindow();

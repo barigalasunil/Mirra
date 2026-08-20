@@ -9,6 +9,7 @@ electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     adbDiscoverIp: (deviceId) => electron_1.ipcRenderer.invoke('adb:discover-ip', deviceId),
     adbKeepAwake: (deviceId, state) => electron_1.ipcRenderer.invoke('adb:keep-awake', deviceId, state),
     adbScreenshot: (deviceId) => electron_1.ipcRenderer.invoke('adb:screenshot', deviceId),
+    longScreenshot: (deviceId) => electron_1.ipcRenderer.invoke('adb:long-screenshot', deviceId),
     iosDevices: () => electron_1.ipcRenderer.invoke('ios:devices'),
     iosScreenshot: (udid) => electron_1.ipcRenderer.invoke('ios:screenshot', udid),
     iosOpenStore: () => electron_1.ipcRenderer.invoke('ios:open-store'),
@@ -66,18 +67,23 @@ electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     utilsCopyFile: (src, dest) => electron_1.ipcRenderer.invoke('utils:copy-file', src, dest),
     storeGet: (key, def) => electron_1.ipcRenderer.invoke('store:get', key, def),
     storeSet: (key, val) => electron_1.ipcRenderer.invoke('store:set', key, val),
+    getQuickScreenshotMode: () => electron_1.ipcRenderer.invoke('settings:get-quick-screenshot'),
+    setQuickScreenshotMode: (val) => electron_1.ipcRenderer.invoke('settings:set-quick-screenshot', val),
+    onToast: (callback) => {
+        electron_1.ipcRenderer.on('toast', (_e, data) => callback(data));
+    },
+    removeToast: () => electron_1.ipcRenderer.removeAllListeners('toast'),
     scrcpyStart: (deviceId) => electron_1.ipcRenderer.invoke('scrcpy:start', deviceId),
     scrcpyStop: () => electron_1.ipcRenderer.invoke('scrcpy:stop'),
     scrcpyStatus: () => electron_1.ipcRenderer.invoke('scrcpy:status'),
     setAlwaysOnTop: (value) => electron_1.ipcRenderer.invoke('window:set-always-on-top', value),
     getAlwaysOnTop: () => electron_1.ipcRenderer.invoke('window:get-always-on-top'),
     closeWindow: () => electron_1.ipcRenderer.invoke('window:close'),
-    toggleDevTools: () => electron_1.ipcRenderer.invoke('window:toggle-devtools'),
-    showContextMenu: (opts) => electron_1.ipcRenderer.invoke('menu:show-context', opts),
-    onMenuAction: (callback) => {
-        electron_1.ipcRenderer.on('menu:action', (_e, action) => callback(action));
+    requestThemeToggle: () => electron_1.ipcRenderer.invoke('theme:toggle'),
+    onThemeChanged: (callback) => {
+        electron_1.ipcRenderer.on('theme:changed', (_e, newTheme) => callback(newTheme));
     },
-    removeMenuAction: () => electron_1.ipcRenderer.removeAllListeners('menu:action'),
+    removeThemeChanged: () => electron_1.ipcRenderer.removeAllListeners('theme:changed'),
     onScrcpyStopped: (callback) => {
         electron_1.ipcRenderer.on('scrcpy:stopped', () => callback());
     },

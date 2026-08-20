@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -23,43 +56,62 @@ let uxplayProcess = null;
 const suppressedProcs = new Set();
 let ipcInitialized = false;
 let uxplayRaiseTimer = null;
+let isCapturingScreenshot = false;
+let isTogglingRecord = false;
 // --- Firewall auto-setup (Windows) ---
 const AIRPLAY_RULE_NAME = 'Mirra AirPlay';
+const AIRPLAY_PORTS = '7000-7002';
 let firewallChecked = false;
+function checkFirewallRule(ruleName) {
+    try {
+        const out = (0, child_process_1.execSync)(`netsh advfirewall firewall show rule name="${ruleName}"`, { windowsHide: true, timeout: 5000 }).toString();
+        return out.includes(ruleName);
+    }
+    catch {
+        return false;
+    }
+}
+function addFirewallRuleElevated(ruleName, protocol, ports) {
+    const psCmd = `Start-Process -FilePath netsh -ArgumentList 'advfirewall firewall add rule name=\\"${ruleName}\\" dir=in action=allow protocol=${protocol} localport=${ports}' -Verb RunAs -WindowStyle Hidden -Wait`;
+    try {
+        (0, child_process_1.execSync)(psCmd, { windowsHide: true, timeout: 15000 });
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function ensureFirewallRulesSync() {
+    const tcpExists = checkFirewallRule(`${AIRPLAY_RULE_NAME} TCP`);
+    const udpExists = checkFirewallRule(`${AIRPLAY_RULE_NAME} UDP`);
+    if (tcpExists && udpExists) {
+        console.log('[firewall] AirPlay rules already exist');
+        return { tcpExists, udpExists, created: true };
+    }
+    let created = false;
+    if (!tcpExists) {
+        const ok = addFirewallRuleElevated(`${AIRPLAY_RULE_NAME} TCP`, 'TCP', AIRPLAY_PORTS);
+        console.log('[firewall] TCP rule:', ok ? 'created' : 'failed');
+        if (ok)
+            created = true;
+    }
+    if (!udpExists) {
+        const ok = addFirewallRuleElevated(`${AIRPLAY_RULE_NAME} UDP`, 'UDP', AIRPLAY_PORTS);
+        console.log('[firewall] UDP rule:', ok ? 'created' : 'failed');
+        if (ok)
+            created = true;
+    }
+    return { tcpExists: tcpExists || created, udpExists: udpExists || created, created };
+}
 function ensureFirewallRules() {
     if (firewallChecked || process.platform !== 'win32')
         return;
     firewallChecked = true;
-    const checkRule = (ruleName) => new Promise(resolve => {
-        (0, child_process_1.execFile)('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${ruleName}`], { windowsHide: true }, (err, stdout) => {
-            resolve(!err && stdout.includes(ruleName));
-        });
-    });
-    const addRule = (ruleName, protocol, ports) => new Promise(resolve => {
-        (0, child_process_1.execFile)('netsh', [
-            'advfirewall', 'firewall', 'add', 'rule',
-            `name=${ruleName}`, 'dir=in', 'action=allow',
-            `protocol=${protocol}`, `localport=${ports}`
-        ], { windowsHide: true }, (err) => resolve(!err));
-    });
     (async () => {
-        const tcpExists = await checkRule(`${AIRPLAY_RULE_NAME} TCP`);
-        const udpExists = await checkRule(`${AIRPLAY_RULE_NAME} UDP`);
-        if (tcpExists && udpExists) {
-            console.log('[firewall] AirPlay rules already exist');
-            return;
-        }
-        if (!tcpExists) {
-            const ok = await addRule(`${AIRPLAY_RULE_NAME} TCP`, 'TCP', '7000-7002');
-            console.log('[firewall] TCP rule:', ok ? 'created' : 'failed (may need admin)');
-        }
-        if (!udpExists) {
-            const ok = await addRule(`${AIRPLAY_RULE_NAME} UDP`, 'UDP', '7000-7002');
-            console.log('[firewall] UDP rule:', ok ? 'created' : 'failed (may need admin)');
-        }
-        if (!tcpExists || !udpExists) {
+        const result = ensureFirewallRulesSync();
+        if (!result.created) {
             mainWindow?.webContents.send('ios:mirror-instruction', {
-                msg: 'If iPhone cannot connect: run as Administrator once, or allow Mirra in Windows Firewall'
+                msg: 'Windows Firewall blocked AirPlay ports. Please allow Mirra when prompted, or run as Administrator once.'
             });
         }
     })();
@@ -83,14 +135,14 @@ else {
     });
 }
 const getAdbPath = () => {
-    return isDev
-        ? path_1.default.join(__dirname, '../../resources/scrcpy/adb.exe')
-        : path_1.default.join(process.resourcesPath, 'scrcpy', 'adb.exe');
+    return electron_1.app.isPackaged
+        ? path_1.default.join(process.resourcesPath, 'scrcpy', 'adb.exe')
+        : path_1.default.join(__dirname, '../../resources/scrcpy/adb.exe');
 };
 const getScrcpyPath = () => {
-    return isDev
-        ? path_1.default.join(__dirname, '../../resources/scrcpy/scrcpy.exe')
-        : path_1.default.join(process.resourcesPath, 'scrcpy', 'scrcpy.exe');
+    return electron_1.app.isPackaged
+        ? path_1.default.join(process.resourcesPath, 'scrcpy', 'scrcpy.exe')
+        : path_1.default.join(__dirname, '../../resources/scrcpy/scrcpy.exe');
 };
 async function loadWithRetry(win, url, maxRetries = 15, delayMs = 300) {
     for (let i = 0; i < maxRetries; i++) {
@@ -105,7 +157,26 @@ async function loadWithRetry(win, url, maxRetries = 15, delayMs = 300) {
     }
     await win.loadURL(url);
 }
+async function detectDevPort() {
+    const ports = [5173, 5174, 5175, 5176, 5177];
+    const net = await Promise.resolve().then(() => __importStar(require('net')));
+    for (const port of ports) {
+        try {
+            await new Promise((resolve, reject) => {
+                const socket = new net.Socket();
+                socket.once('connect', () => { socket.destroy(); resolve(); });
+                socket.once('error', () => { socket.destroy(); reject(new Error('no')); });
+                socket.connect(port, '127.0.0.1');
+            });
+            console.log('[main] detected Vite dev server on port', port);
+            return port;
+        }
+        catch { /* port not available, try next */ }
+    }
+    return 5173;
+}
 async function createWindow() {
+    console.time('[main] window-to-visible');
     mainWindow = new electron_1.BrowserWindow({
         width: 64,
         height: 500,
@@ -115,7 +186,7 @@ async function createWindow() {
         autoHideMenuBar: true,
         title: 'Mirra',
         frame: false,
-        backgroundColor: '#111114',
+        backgroundColor: store.get('theme', 'dark') === 'light' ? '#f7f7f8' : '#111114',
         show: false,
         roundedCorners: true,
         webPreferences: {
@@ -145,12 +216,21 @@ async function createWindow() {
     });
     mainWindow.on('restore', () => (0, scrcpyWindow_1.restoreMirror)());
     mainWindow.on('focus', () => (0, scrcpyWindow_1.restoreMirror)());
+    // Show the toolbar shell immediately — never hold the window hostage
+    // to page load. Vite dev-server loads can hang 10-70s without erroring;
+    // content paints whenever the load resolves (loadWithRetry keeps
+    // retrying failures in dev). Packaged builds load from disk in ~200ms.
+    mainWindow.show();
+    mainWindow.focus();
+    console.timeEnd('[main] window-to-visible');
+    console.log('[main] window shown (content loads in background)');
     if (isDev) {
         try {
-            await loadWithRetry(mainWindow, 'http://localhost:5173');
+            const port = await detectDevPort();
+            await loadWithRetry(mainWindow, `http://localhost:${port}`);
         }
         catch (err) {
-            console.error('[main] load failed, showing window anyway:', err);
+            console.error('[main] load failed:', err);
         }
     }
     else {
@@ -158,12 +238,14 @@ async function createWindow() {
             await mainWindow.loadFile(path_1.default.join(__dirname, '../../dist/index.html'));
         }
         catch (err) {
-            console.error('[main] load failed, showing window anyway:', err);
+            console.error('[main] load failed:', err);
         }
     }
-    mainWindow.show();
-    mainWindow.focus();
-    console.log('[main] window shown after loadURL resolved');
+    // Push the saved theme once the renderer is up (renderer's own
+    // initTheme on mount is the primary path; this is a sync safety net).
+    setTimeout(() => {
+        mainWindow?.webContents.send('theme:changed', store.get('theme', 'dark'));
+    }, 500);
 }
 electron_1.app.whenReady().then(() => {
     createWindow();
@@ -302,6 +384,12 @@ if (!ipcInitialized) {
     // Open the screenshot preview popup (Copy / Save As buttons) over the mirror
     // window. Shared by the Android (scrcpy) and iOS (pymobiledevice3) paths.
     function showScreenshotPopup(base64Image, tempPath) {
+        // Close any existing popup first so rapid captures never stack up
+        // overlapping windows with the older one stuck underneath.
+        if (screenshotPopupWindow && !screenshotPopupWindow.isDestroyed()) {
+            screenshotPopupWindow.close();
+            screenshotPopupWindow = null;
+        }
         pendingScreenshotPath = tempPath;
         pendingScreenshotBase64 = base64Image;
         const t0 = Date.now();
@@ -420,6 +508,11 @@ if (!ipcInitialized) {
         });
     }
     electron_1.ipcMain.handle('adb:screenshot', async (_, deviceId) => {
+        if (isCapturingScreenshot) {
+            console.log('[screenshot] already capturing, ignoring duplicate request');
+            return { success: false, reason: 'already_capturing' };
+        }
+        isCapturingScreenshot = true;
         const t0 = Date.now();
         try {
             console.log(`[${ts()}] [screenshot] step 1: screencap on device`, deviceId);
@@ -431,6 +524,17 @@ if (!ipcInitialized) {
             await runAdbCommand(['-s', deviceId, 'shell', 'rm', '/sdcard/mirra_shot.png']);
             pendingScreenshotPath = tempPath;
             console.log(`[${ts()}] [screenshot] step 4: pending screenshot stored at`, tempPath);
+            // Quick screenshot mode: skip the popup, copy straight to clipboard
+            const quickMode = store.get('quickScreenshotMode', false);
+            if (quickMode) {
+                const img = electron_1.nativeImage.createFromPath(tempPath);
+                electron_1.clipboard.writeImage(img);
+                mainWindow?.webContents.send('toast', {
+                    msg: 'Screenshot copied to clipboard', type: 'success'
+                });
+                console.log(`[${ts()}] [screenshot] quick mode: copied to clipboard (+${Date.now() - t0}ms)`);
+                return { success: true, quickMode: true };
+            }
             // Read image and encode to base64 immediately
             const imgBuffer = await fs_1.default.promises.readFile(tempPath);
             const base64Image = imgBuffer.toString('base64');
@@ -441,6 +545,72 @@ if (!ipcInitialized) {
         catch (e) {
             console.error('[screenshot] handler threw:', e);
             throw new Error("Screenshot failed: " + e.toString());
+        }
+        finally {
+            isCapturingScreenshot = false;
+        }
+    });
+    // --- Full page (long) screenshot: auto-scroll + multi-capture + stitch ---
+    async function stitchImagesVertically(buffers, outPath) {
+        const sharp = require('sharp');
+        const metas = await Promise.all(buffers.map((b) => sharp(b).metadata()));
+        const totalHeight = metas.reduce((sum, m) => sum + (m.height ?? 0), 0);
+        const width = metas[0].width ?? 1080;
+        const composite = [];
+        let yOffset = 0;
+        for (let i = 0; i < buffers.length; i++) {
+            composite.push({ input: buffers[i], top: yOffset, left: 0 });
+            yOffset += metas[i].height ?? 0;
+        }
+        await sharp({
+            create: { width, height: totalHeight, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } }
+        }).composite(composite).png().toFile(outPath);
+    }
+    async function imagesAreSimilar(a, b) {
+        // Simple size comparison as a fast heuristic
+        // (true pixel diff would need pixelmatch — keep simple for v1)
+        return a.length === b.length;
+    }
+    electron_1.ipcMain.handle('adb:long-screenshot', async (_e, deviceId) => {
+        if (isCapturingScreenshot) {
+            console.log('[long-screenshot] already capturing, ignoring duplicate request');
+            return { success: false, reason: 'already_capturing' };
+        }
+        isCapturingScreenshot = true;
+        try {
+            const maxCaptures = 8; // safety limit — stop after 8 scrolls
+            const captures = [];
+            const tempDir = electron_1.app.getPath('temp');
+            for (let i = 0; i < maxCaptures; i++) {
+                const shotPath = path_1.default.join(tempDir, `mirra_long_${i}.png`);
+                await runAdbCommand(['-s', deviceId, 'shell', 'screencap', '-p', '/sdcard/mirra_long_tmp.png']);
+                await runAdbCommand(['-s', deviceId, 'pull', '/sdcard/mirra_long_tmp.png', shotPath]);
+                const buf = await fs_1.default.promises.readFile(shotPath);
+                captures.push(buf);
+                // Check if this capture is near-identical to the previous one
+                // (means we've reached the bottom — stop scrolling)
+                if (i > 0 && await imagesAreSimilar(captures[i - 1], buf)) {
+                    break;
+                }
+                // Scroll down using adb swipe (simulates a scroll gesture)
+                await runAdbCommand(['-s', deviceId, 'shell', 'input', 'swipe', '500', '1800', '500', '400', '300']);
+                await new Promise(r => setTimeout(r, 500)); // let UI settle
+            }
+            await runAdbCommand(['-s', deviceId, 'shell', 'rm', '/sdcard/mirra_long_tmp.png']).catch(() => { });
+            // Stitch captures vertically using sharp
+            const stitchedPath = path_1.default.join(tempDir, 'mirra_long_final.png');
+            await stitchImagesVertically(captures, stitchedPath);
+            // Reuse the exact same screenshot popup flow as regular screenshots
+            const imgBuffer = await fs_1.default.promises.readFile(stitchedPath);
+            showScreenshotPopup(imgBuffer.toString('base64'), stitchedPath);
+            return { success: true, tempPath: stitchedPath };
+        }
+        catch (e) {
+            console.error('[long-screenshot] failed:', e?.message ?? e);
+            return { success: false, error: e?.message ?? String(e) };
+        }
+        finally {
+            isCapturingScreenshot = false;
         }
     });
     // iOS: list connected iOS devices (via pymobiledevice3)
@@ -454,12 +624,27 @@ if (!ipcInitialized) {
     });
     // iOS: take screenshot
     electron_1.ipcMain.handle('ios:screenshot', async (_event, udid) => {
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        const tempPath = path_1.default.join(electron_1.app.getPath('temp'), `ios_shot_${ts}.png`);
-        console.log('[ios-screenshot] request for device', udid, '->', tempPath);
+        if (isCapturingScreenshot) {
+            console.log('[screenshot] already capturing, ignoring duplicate request');
+            return { success: false, reason: 'already_capturing' };
+        }
+        isCapturingScreenshot = true;
         try {
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const tempPath = path_1.default.join(electron_1.app.getPath('temp'), `ios_shot_${stamp}.png`);
+            console.log('[ios-screenshot] request for device', udid, '->', tempPath);
             await (0, ios_utils_1.takeIosScreenshot)(udid, tempPath);
             console.log('[ios-screenshot] success:', tempPath);
+            // Quick screenshot mode: skip the popup, copy straight to clipboard
+            const quickMode = store.get('quickScreenshotMode', false);
+            if (quickMode) {
+                const img = electron_1.nativeImage.createFromPath(tempPath);
+                electron_1.clipboard.writeImage(img);
+                mainWindow?.webContents.send('toast', {
+                    msg: 'Screenshot copied to clipboard', type: 'success'
+                });
+                return { success: true, quickMode: true };
+            }
             const imgBuffer = await fs_1.default.promises.readFile(tempPath);
             showScreenshotPopup(imgBuffer.toString('base64'), tempPath);
             return { success: true, tempPath };
@@ -467,6 +652,9 @@ if (!ipcInitialized) {
         catch (err) {
             console.error('[ios-screenshot] FAILED:', err.message);
             return { success: false, error: err.message };
+        }
+        finally {
+            isCapturingScreenshot = false;
         }
     });
     // iOS: open the Apple Devices app page in the Microsoft Store
@@ -515,15 +703,25 @@ if (!ipcInitialized) {
         return result.filePath;
     }
     electron_1.ipcMain.handle('adb:record-start', async (_e, deviceId) => {
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        const temp = path_1.default.join(electron_1.app.getPath('temp'), `mirra_recording_${ts}.mp4`);
-        recordingFilePath = temp;
-        await closeScrcpyAndWait();
-        await launchScrcpy(deviceId, [
-            '--record', temp,
-            '--record-format', 'mp4',
-        ]);
-        return { cancelled: false, filePath: temp };
+        if (isTogglingRecord) {
+            console.log('[recording] already toggling, ignoring duplicate request');
+            return { cancelled: true };
+        }
+        isTogglingRecord = true;
+        try {
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            const temp = path_1.default.join(electron_1.app.getPath('temp'), `mirra_recording_${ts}.mp4`);
+            recordingFilePath = temp;
+            await closeScrcpyAndWait();
+            await launchScrcpy(deviceId, [
+                '--record', temp,
+                '--record-format', 'mp4',
+            ]);
+            return { cancelled: false, filePath: temp };
+        }
+        finally {
+            isTogglingRecord = false;
+        }
     });
     electron_1.ipcMain.handle('adb:record-stop', async (_e, deviceId) => {
         await closeScrcpyAndWait();
@@ -576,6 +774,12 @@ if (!ipcInitialized) {
     });
     electron_1.ipcMain.handle('store:get', (_, key, def) => store.get(key, def));
     electron_1.ipcMain.handle('store:set', (_, key, val) => store.set(key, val));
+    // Quick screenshot mode setting (skip popup, copy straight to clipboard)
+    electron_1.ipcMain.handle('settings:get-quick-screenshot', () => store.get('quickScreenshotMode', false));
+    electron_1.ipcMain.handle('settings:set-quick-screenshot', (_e, val) => {
+        store.set('quickScreenshotMode', !!val);
+        return true;
+    });
     // scrcpy.exe native mirror window
     async function launchScrcpy(deviceId, extraArgs = []) {
         if (scrcpyProcess && !scrcpyProcess.killed) {
@@ -684,48 +888,24 @@ if (!ipcInitialized) {
     electron_1.ipcMain.handle('window:close', () => {
         mainWindow?.close();
     });
-    function toggleDevToolsDetached() {
-        if (!mainWindow)
-            return;
-        if (mainWindow.webContents.isDevToolsOpened()) {
-            mainWindow.webContents.closeDevTools();
-        }
-        else {
-            mainWindow.webContents.openDevTools({ mode: 'detach', activate: true });
-        }
-    }
-    electron_1.ipcMain.handle('window:toggle-devtools', () => toggleDevToolsDetached());
-    // More-options native context menu
-    electron_1.ipcMain.handle('menu:show-context', async (_e, opts) => {
-        const template = [
-            {
-                label: '📶  Connect via Wi-Fi',
-                click: () => mainWindow?.webContents.send('menu:action', 'wifi')
-            },
-            { type: 'separator' },
-            {
-                label: opts.theme === 'light' ? '🌙  Dark Mode' : '☀️  Light Mode',
-                click: () => mainWindow?.webContents.send('menu:action', 'toggle-theme')
-            },
-            {
-                label: opts.alwaysOnTop ? '📌  Unpin window' : '📌  Pin window',
-                click: () => mainWindow?.webContents.send('menu:action', 'toggle-pin')
-            },
-            { type: 'separator' },
-            {
-                label: '🔧  Developer Tools',
-                click: () => toggleDevToolsDetached()
-            },
-            { type: 'separator' },
-            { label: 'Mirra v0.1.0', enabled: false }
-        ];
-        electron_1.Menu.buildFromTemplate(template).popup({ window: mainWindow });
+    // Theme changes flow one way: renderer request → main flips + persists →
+    // 'theme:changed' broadcast → every renderer applies the class. This keeps
+    // the toolbar window, popup windows and the store in sync with a single
+    // source of truth.
+    electron_1.ipcMain.handle('theme:toggle', () => {
+        const current = store.get('theme', 'dark');
+        const next = current === 'dark' ? 'light' : 'dark';
+        store.set('theme', next);
+        mainWindow?.webContents.send('theme:changed', next);
+        console.log('[theme] toggled to', next);
+        return next;
     });
     // iOS: UxPlay AirPlay mirroring
     function getUxplayPath() {
-        return isDev
-            ? path_1.default.join(__dirname, '../../resources/ios/uxplay.exe')
-            : path_1.default.join(process.resourcesPath, 'ios', 'uxplay.exe');
+        const base = electron_1.app.isPackaged
+            ? process.resourcesPath
+            : path_1.default.join(__dirname, '..', '..', 'resources');
+        return path_1.default.join(base, 'ios', 'uxplay.exe');
     }
     function killUxplay() {
         clearUxplayRaiseTimer();
@@ -785,24 +965,21 @@ if (!ipcInitialized) {
         });
         uxplayProcess = proc;
         console.log('[ios-mirror] uxplay spawned, args:', args.join(' '));
-        // Immediately start trying to raise UxPlay's video window. The GStreamer
-        // window may appear before or after stdout emits specific patterns, so we
-        // raise proactively on a timer instead of waiting for a regex match.
+        // Immediately start trying to raise UxPlay's video window. GStreamer's
+        // d3d11videosink creates the window under a different PID than the UxPlay
+        // process, so PID-based EnumWindows never finds it. Use title-based
+        // FindWindowW ("Mirra") instead, matching how resizeIosMirrorWindow works.
         clearUxplayRaiseTimer();
         let raiseAttempts = 0;
-        const pid = proc.pid;
-        if (pid) {
-            console.log('[ios-mirror] starting periodic raiseProcessWindows for pid', pid);
-            uxplayRaiseTimer = setInterval(() => {
-                const raised = (0, scrcpyWindow_1.raiseProcessWindows)(pid);
-                console.log('[ios-mirror] raiseProcessWindows returned', raised, 'for pid', pid, '(attempt', raiseAttempts + 1, '/ 30)');
-                if (raised > 0)
-                    (0, scrcpyWindow_1.resizeIosMirrorWindow)();
-                if (++raiseAttempts > 30) {
-                    clearUxplayRaiseTimer();
-                }
-            }, 1000);
-        }
+        uxplayRaiseTimer = setInterval(() => {
+            const raised = (0, scrcpyWindow_1.raiseIosMirrorWindow)();
+            console.log('[ios-mirror] raiseIosMirrorWindow returned', raised, '(attempt', raiseAttempts + 1, '/ 30)');
+            if (raised)
+                (0, scrcpyWindow_1.resizeIosMirrorWindow)();
+            if (++raiseAttempts > 30) {
+                clearUxplayRaiseTimer();
+            }
+        }, 1000);
         // Also start tracking the UxPlay window by title ("Mirra") so that
         // getMirrorRect / refreshMirrorRect work for screenshot popup positioning.
         (0, scrcpyWindow_1.startIosTracking)();
@@ -837,25 +1014,32 @@ if (!ipcInitialized) {
                 handleSinkFallback('stderr');
             }
         };
+        let stdoutBuffer = '';
         const onStdout = (d) => {
-            const text = d.toString();
-            console.log('[uxplay stdout]', text.trim());
-            if (/server|started|listening|running/i.test(text)) {
-                mainWindow?.webContents.send('ios:mirror-ready');
-            }
-            if (/raop_rtp_mirror starting mirroring|begin streaming/i.test(text)) {
-                console.log('[ios-mirror] mirroring started (stdout pattern matched), clearing raise timer');
-                clearUxplayRaiseTimer();
-                if (pid)
-                    (0, scrcpyWindow_1.raiseProcessWindows)(pid);
-                (0, scrcpyWindow_1.resizeIosMirrorWindow)();
-                mainWindow?.webContents.send('ios:client-connected');
-            }
-            if (/client disconnected|disconnect/i.test(text)) {
-                mainWindow?.webContents.send('ios:client-disconnected');
-            }
-            if (PIPELINE_ERROR_RE.test(text)) {
-                handleSinkFallback('stdout');
+            stdoutBuffer += d.toString();
+            const lines = stdoutBuffer.split(/\r?\n/);
+            stdoutBuffer = lines.pop() || '';
+            for (const line of lines) {
+                const text = line.trim();
+                if (!text)
+                    continue;
+                console.log('[uxplay stdout]', text);
+                if (/server|started|listening|running/i.test(text)) {
+                    mainWindow?.webContents.send('ios:mirror-ready');
+                }
+                if (/raop_rtp_mirror starting mirroring|begin streaming|Accepted IPv4 client|Accepted IPv6 client/i.test(text)) {
+                    console.log('[ios-mirror] client connecting (stdout pattern matched):', text);
+                    clearUxplayRaiseTimer();
+                    (0, scrcpyWindow_1.raiseIosMirrorWindow)();
+                    (0, scrcpyWindow_1.resizeIosMirrorWindow)();
+                    mainWindow?.webContents.send('ios:client-connected');
+                }
+                if (/client disconnected|disconnect/i.test(text)) {
+                    mainWindow?.webContents.send('ios:client-disconnected');
+                }
+                if (PIPELINE_ERROR_RE.test(text)) {
+                    handleSinkFallback('stdout');
+                }
             }
         };
         proc.stderr?.on('data', onStderr);
@@ -889,7 +1073,24 @@ if (!ipcInitialized) {
         if (!hasNetwork) {
             return { success: false, reason: 'no_network' };
         }
-        getWifiIP();
+        const wifiIP = getWifiIP();
+        // Ensure firewall rules exist before spawning UxPlay
+        if (process.platform === 'win32') {
+            const tcpExists = checkFirewallRule(`${AIRPLAY_RULE_NAME} TCP`);
+            const udpExists = checkFirewallRule(`${AIRPLAY_RULE_NAME} UDP`);
+            if (!tcpExists || !udpExists) {
+                console.log('[firewall] rules missing at mirror-start, attempting to create...');
+                const result = ensureFirewallRulesSync();
+                if (!result.created) {
+                    console.error('[firewall] failed to create rules, iOS mirroring may not work');
+                    return {
+                        success: false,
+                        error: 'firewall',
+                        detail: 'Windows Firewall is blocking AirPlay ports (7000-7002). Please run "netsh advfirewall firewall add rule name=\"Mirra AirPlay TCP\" dir=in action=allow protocol=TCP localport=7000-7002" and "netsh advfirewall firewall add rule name=\"Mirra AirPlay UDP\" dir=in action=allow protocol=UDP localport=7000-7002" from an Administrator command prompt, or run Mirra as Administrator once.'
+                    };
+                }
+            }
+        }
         isStartingUxplay = true;
         try {
             uxplaySinkIndex = 0;
@@ -898,7 +1099,7 @@ if (!ipcInitialized) {
             setTimeout(() => {
                 if (uxplayProcess && !uxplayProcess.killed) {
                     mainWindow?.webContents.send('ios:mirror-instruction', {
-                        msg: 'On your iPhone: Control Center → Screen Mirroring → Mirra\nIf not visible: allow Mirra in Windows Firewall when prompted'
+                        msg: `On your iPhone: Control Center → Screen Mirroring → Mirra\nIP: ${wifiIP || 'unknown'}\nIf not visible: ensure PC and iPhone are on the same Wi-Fi network`
                     });
                 }
             }, 2000);

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, type CSSProperties } from 'react';
-import { Play, Camera, Monitor, Sun, CheckCircle2, Circle, Square, X, Pin, PinOff, MoreVertical, Info } from 'lucide-react';
+import { Play, Camera, Monitor, Sun, Moon, Zap, ZapOff, ScanLine, CircleStop, CheckCircle2, Circle, Square, X, Pin, PinOff, Info } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -14,6 +14,12 @@ type DeviceEntry =
 
 const electron = (window as any).electronAPI;
 
+// Categorized console logger so DevTools' console filter box becomes useful:
+// typing e.g. "recording" in the filter shows only recording-related logs.
+const debugLog = (category: string, msg: string, data?: any) => {
+    console.log(`%c[${category}]`, 'color:#378ADD;font-weight:bold', msg, data ?? '');
+};
+
 const isScreenshotPopup = typeof window !== 'undefined' && window.location.hash === '#screenshot-popup';
 
 function App() {
@@ -24,9 +30,10 @@ function App() {
     const mirrorStartTime = useRef<number>(0);
     const [isMirroring, setIsMirroring] = useState(false);
     const [keepAwake, setKeepAwake] = useState(false);
-    const [showWifiConnect, setShowWifiConnect] = useState(false);
-    const [wifiIp, setWifiIp] = useState('');
-    const [autoDiscoverInProgress, setAutoDiscoverInProgress] = useState(false);
+    const [quickScreenshotMode, setQuickScreenshotMode] = useState(false);
+    const [isCapturingShot, setIsCapturingShot] = useState(false);
+    const [isTogglingRecord, setIsTogglingRecord] = useState(false);
+    const [isCapturingLongShot, setIsCapturingLongShot] = useState(false);
     const [toasts, setToasts] = useState<{ id: string; msg: string; type: 'success' | 'error' | 'info'; action?: { label: string; onClick: () => void } }[]>([]);
     const [isStarting, setIsStarting] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
@@ -48,16 +55,25 @@ function App() {
     useEffect(() => {
         initTheme();
         initAlwaysOnTop();
+        initQuickScreenshot();
         pollDevices();
         const interval = setInterval(pollDevices, 3000);
         return () => clearInterval(interval);
+    }, []);
+
+    // Toasts pushed from main (e.g. quick-screenshot copied, popup copy actions)
+    useEffect(() => {
+        electron.onToast((data: { msg: string; type?: 'success' | 'error' | 'info' }) => {
+            addToast(data.msg, data.type ?? 'success');
+        });
+        return () => electron.removeToast();
     }, []);
 
     useEffect(() => {
         let stoppedListener = (_data: { code: number }) => {
             const elapsed = Date.now() - mirrorStartTime.current;
             if (elapsed < 2000) {
-                console.log('[renderer] ignoring early scrcpy exit, elapsed:', elapsed);
+                debugLog('mirror', 'ignoring early scrcpy exit, elapsed:', elapsed);
                 return;
             }
             setIsMirroring(false);
@@ -115,17 +131,21 @@ function App() {
 
     const initTheme = async () => {
         const storedTheme = await electron.storeGet('theme', 'dark');
-        setTheme(storedTheme === 'dark' ? 'dark' : 'light');
-        if (storedTheme === 'dark') document.documentElement.classList.add('dark');
-        else document.documentElement.classList.remove('dark');
+        const saved = storedTheme === 'light' ? 'light' : 'dark';
+        setTheme(saved);
+        document.documentElement.classList.toggle('dark', saved === 'dark');
     };
 
-    const toggleTheme = async () => {
-        const next = theme === 'dark' ? 'light' : 'dark';
-        setTheme(next);
-        await electron.storeSet('theme', next);
-        if (next === 'dark') document.documentElement.classList.add('dark');
-        else document.documentElement.classList.remove('dark');
+    const initQuickScreenshot = async () => {
+        const val = await electron.getQuickScreenshotMode();
+        setQuickScreenshotMode(!!val);
+    };
+
+    const toggleQuickScreenshot = async () => {
+        const next = !quickScreenshotMode;
+        setQuickScreenshotMode(next);
+        await electron.setQuickScreenshotMode(next);
+        debugLog('ipc', 'quick screenshot mode:', next);
     };
 
     const initAlwaysOnTop = async () => {
@@ -139,15 +159,20 @@ function App() {
         await electron.setAlwaysOnTop(newValue);
     };
 
+    // Theme is owned by the main process (single source of truth); this
+    // window just applies whatever value it broadcasts.
     useEffect(() => {
-        const menuListener = (action: string) => {
-            if (action === 'wifi') setShowWifiConnect(true);
-            else if (action === 'toggle-theme') toggleTheme();
-            else if (action === 'toggle-pin') toggleAlwaysOnTop();
-        };
-        electron.onMenuAction(menuListener);
-        return () => electron.removeMenuAction();
-    }, [toggleTheme, toggleAlwaysOnTop]);
+        electron.onThemeChanged((newTheme: string) => {
+            const t = newTheme === 'light' ? 'light' : 'dark';
+            setTheme(t);
+            document.documentElement.classList.toggle('dark', t === 'dark');
+        });
+        return () => electron.removeThemeChanged();
+    }, []);
+
+    const handleThemeToggle = async () => {
+        await electron.requestThemeToggle();
+    };
 
     useEffect(() => {
         const startedListener = () => {
@@ -159,7 +184,7 @@ function App() {
             setIsIosMirroring(false);
             setIosConnectionStatus(null);
             addToast('iOS mirroring stopped', 'success');
-            console.log('[ios-mirror] uxplay exited, code', code);
+            debugLog('ios', 'uxplay exited, code', code);
         };
         electron.onIosMirrorStopped(stoppedListener);
         const errorListener = (detail: string) => {
@@ -219,49 +244,6 @@ function App() {
         setStatus(st);
     };
 
-    const handleConnectWifi = async () => {
-        if (!wifiIp) return;
-        const res = await electron.adbConnectWifi(wifiIp);
-        if (res.success) {
-            addToast("Connected via Wi-Fi", 'success');
-            setShowWifiConnect(false);
-            pollDevices();
-        } else {
-            addToast(res.message, 'error');
-        }
-    };
-
-    const handleEnableWifi = async () => {
-        if (!selectedDevice || selectedDevice.kind !== 'android') return;
-        const res = await electron.adbEnableWifi(selectedDevice.id);
-        if (res.success) {
-            addToast('Wireless debugging enabled on device', 'success');
-            const discover = await electron.adbDiscoverIp(selectedDevice.id);
-            if (discover.success && discover.ip) {
-                setWifiIp(`${discover.ip}:5555`);
-                addToast(`Detected device IP ${discover.ip}:5555`, 'success');
-            }
-        } else {
-            addToast(res.message || 'Failed to enable Wi-Fi', 'error');
-        }
-    };
-
-    const handleDiscoverIp = async () => {
-        if (!selectedDevice || selectedDevice.kind !== 'android') return;
-        setAutoDiscoverInProgress(true);
-        try {
-            const discover = await electron.adbDiscoverIp(selectedDevice.id);
-            if (discover.success && discover.ip) {
-                setWifiIp(`${discover.ip}:5555`);
-                addToast(`Discovered device IP ${discover.ip}:5555`, 'success');
-            } else {
-                addToast(discover.message || 'Failed to discover IP', 'error');
-            }
-        } finally {
-            setAutoDiscoverInProgress(false);
-        }
-    };
-
     const toggleMirror = async () => {
         if (!selectedDevice) return;
         if (isStarting) return;
@@ -281,6 +263,8 @@ function App() {
                             addToast('Connect PC to Wi-Fi first — AirPlay requires Wi-Fi', 'error');
                         } else if (res?.error === 'binary_missing') {
                             addToast("iOS mirroring isn't set up on this computer. Install the UxPlay helper and try again.", 'error');
+                        } else if (res?.error === 'firewall') {
+                            addToast(res?.detail || 'Windows Firewall is blocking AirPlay. Run Mirra as Administrator once to fix this.', 'error', undefined, 12000);
                         } else if (res?.reason === 'already_running') {
                             setIsIosMirroring(true);
                         } else {
@@ -326,56 +310,66 @@ function App() {
 
     const handleRecord = async () => {
         if (!selectedDevice) return;
+        if (isTogglingRecord) return;
+        try {
+            setIsTogglingRecord(true);
 
-        if (selectedDevice.kind === 'ios') {
-            if (!isIosMirroring && !isRecording) return;
-            if (!isRecording) {
-                const result = await electron.iosRecordStart();
-                if (result?.success) {
-                    setIsRecording(true);
-                    setRecordStartTime(Date.now());
-                    addToast('iOS recording started', 'success');
+            if (selectedDevice.kind === 'ios') {
+                if (!isIosMirroring && !isRecording) return;
+                if (!isRecording) {
+                    const result = await electron.iosRecordStart();
+                    if (result?.success) {
+                        setIsRecording(true);
+                        setRecordStartTime(Date.now());
+                        addToast('iOS recording started', 'success');
+                    } else {
+                        addToast(result?.error || 'Failed to start iOS recording', 'error');
+                    }
                 } else {
-                    addToast(result?.error || 'Failed to start iOS recording', 'error');
+                    const result = await electron.iosRecordStop();
+                    setIsRecording(false);
+                    if (result?.filePath) addToast('Recording saved', 'success');
+                    else if (result?.cancelled) addToast('Recording discarded', 'success');
+                    else addToast(result?.error || 'Failed to stop iOS recording', 'error');
                 }
+                return;
+            }
+
+            if (!isMirroring && !isRecording) return;
+
+            if (!isRecording) {
+                const result = await electron.recordStart(selectedDevice.id);
+                if (result?.cancelled) return;
+                setIsRecording(true);
+                setRecordStartTime(Date.now());
+                addToast('Recording started', 'success');
             } else {
-                const result = await electron.iosRecordStop();
+                const result = await electron.recordStop(selectedDevice.id);
                 setIsRecording(false);
                 if (result?.filePath) addToast('Recording saved', 'success');
-                else if (result?.cancelled) addToast('Recording discarded', 'success');
-                else addToast(result?.error || 'Failed to stop iOS recording', 'error');
+                else addToast('Recording discarded', 'success');
             }
-            return;
-        }
-
-        if (!isMirroring && !isRecording) return;
-
-        if (!isRecording) {
-            const result = await electron.recordStart(selectedDevice.id);
-            if (result?.cancelled) return;
-            setIsRecording(true);
-            setRecordStartTime(Date.now());
-            addToast('Recording started', 'success');
-        } else {
-            const result = await electron.recordStop(selectedDevice.id);
-            setIsRecording(false);
-            if (result?.filePath) addToast('Recording saved', 'success');
-            else addToast('Recording discarded', 'success');
+        } finally {
+            setIsTogglingRecord(false);
         }
     };
 
     const handleScreenshot = async () => {
         if (!selectedDevice) {
-            console.log('[screenshot] no device selected');
+            debugLog('screenshot', 'no device selected');
             addToast('No device selected', 'error');
             return;
         }
-        console.log('[screenshot] calling for device:', selectedDevice.kind, selectedDevice.id);
+        if (isCapturingShot) return;
+        setIsCapturingShot(true);
         try {
+            debugLog('screenshot', 'calling for device:', `${selectedDevice.kind} ${selectedDevice.id}`);
             if (selectedDevice.kind === 'ios') {
                 const res = await electron.iosScreenshot(selectedDevice.id);
                 if (res?.success) {
-                    addToast('Screenshot captured', 'success');
+                    if (!res.quickMode) addToast('Screenshot captured', 'success');
+                } else if (res?.reason === 'already_capturing') {
+                    addToast('Screenshot already in progress', 'info');
                 } else {
                     addToast(res?.error || 'iOS screenshot failed', 'error');
                 }
@@ -383,12 +377,38 @@ function App() {
             }
             const res = await electron.adbScreenshot(selectedDevice.id);
             if (res?.success) {
-                addToast('Screenshot captured', 'success');
+                if (!res.quickMode) addToast('Screenshot captured', 'success');
+            } else if (res?.reason === 'already_capturing') {
+                addToast('Screenshot already in progress', 'info');
             } else {
                 addToast(res?.message || 'Screenshot failed', 'error');
             }
         } catch (e: any) {
             addToast(e.message, 'error');
+        } finally {
+            setIsCapturingShot(false);
+        }
+    };
+
+    const handleLongScreenshot = async () => {
+        if (!selectedDevice || selectedDevice.kind !== 'android') return;
+        if (isCapturingLongShot) return;
+        setIsCapturingLongShot(true);
+        try {
+            addToast('Capturing full page... this may take a few seconds', 'info');
+            const result = await electron.longScreenshot(selectedDevice.id);
+            if (result?.success) {
+                debugLog('screenshot', 'long screenshot stitched:', result.tempPath);
+                addToast('Full page screenshot captured', 'success');
+            } else if (result?.reason === 'already_capturing') {
+                addToast('Screenshot already in progress', 'info');
+            } else {
+                addToast(result?.error || 'Full page screenshot failed', 'error');
+            }
+        } catch (e: any) {
+            addToast(e.message, 'error');
+        } finally {
+            setIsCapturingLongShot(false);
         }
     };
 
@@ -399,15 +419,24 @@ function App() {
         return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
     };
 
+    // Expose live app state for inspection in DevTools console (dev builds only):
+    // type __mirraDebug.getState() in the Console tab.
+    useEffect(() => {
+        if (import.meta.env.DEV) {
+            (window as any).__mirraDebug = {
+                getState: () => ({ isMirroring, isRecording, selectedDevice, theme })
+            };
+        }
+    }, [isMirroring, isRecording, selectedDevice, theme]);
+
     const isConnected = !!selectedDevice;
     const deviceName = selectedDevice?.name || '';
-
 
     if (isScreenshotPopup) return <ScreenshotPopup />;
 
     return (
         <div
-            className="h-screen w-full rounded-2xl overflow-hidden bg-[#111114]/95 backdrop-blur-sm border border-white/10 flex flex-col items-center py-2 gap-0.5 select-none cursor-move"
+            className="h-screen w-full rounded-2xl overflow-hidden bg-white/95 dark:bg-[#111114]/95 backdrop-blur-sm border border-gray-200 dark:border-white/10 flex flex-col items-center py-2 gap-0.5 select-none cursor-move"
             style={{ WebkitAppRegion: 'drag', boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 0.5px rgba(255,255,255,0.08)' } as CSSProperties}
         >
             {/* App icon / logo */}
@@ -416,12 +445,12 @@ function App() {
             </div>
 
             {/* Divider */}
-            <div className="w-8 h-px bg-white/10 mb-0.5" />
+            <div className="w-8 h-px bg-gray-200 dark:bg-white/10 mb-0.5" />
 
             {/* Device status dot */}
             <div className="relative group">
-                <div className={`w-2.5 h-2.5 rounded-full mx-auto mb-2 ${isConnected ? 'bg-green-400' : 'bg-white/20'}`} />
-                <div className="absolute left-14 top-0 bg-[#1f1f26] border border-white/10 rounded-lg px-3 py-2 text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity">
+                <div className={`w-2.5 h-2.5 rounded-full mx-auto mb-2 ${isConnected ? 'bg-green-400' : 'bg-gray-300 dark:bg-white/20'}`} />
+                <div className="absolute left-14 top-0 bg-white dark:bg-[#1f1f26] border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-white whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity">
                     {deviceName || 'No device'}
                     <br />
                     {isConnected && (
@@ -448,7 +477,7 @@ function App() {
             />
 
             {selectedDevice?.kind === 'ios' && isIosMirroring && iosConnectionStatus && (
-                <div className="text-[10px] text-white/50 text-center mb-1">
+                <div className="text-[10px] text-gray-500 dark:text-white/50 text-center mb-1">
                     {iosConnectionStatus === 'waiting' && 'Waiting for iPhone...'}
                     {iosConnectionStatus === 'connected' && 'iPhone connected ✓'}
                     {iosConnectionStatus === 'disconnected' && 'iPhone disconnected'}
@@ -456,24 +485,45 @@ function App() {
             )}
 
             {/* Divider */}
-            <div className="w-8 h-px bg-white/10 my-1" />
+            <div className="w-8 h-px bg-gray-200 dark:bg-white/10 my-1" />
 
             {/* SCREENSHOT */}
             <IconButton
                 onClick={handleScreenshot}
                 icon={Camera}
-                tooltip="Screenshot"
-                disabled={!selectedDevice}
+                tooltip={isCapturingShot ? 'Capturing…' : 'Screenshot'}
+                disabled={!selectedDevice || isCapturingShot || isCapturingLongShot}
+            />
+
+            {/* QUICK SCREENSHOT — direct to clipboard, skips popup */}
+            <IconButton
+                icon={quickScreenshotMode ? Zap : ZapOff}
+                tooltip={quickScreenshotMode
+                    ? 'Quick Screenshot: ON (direct to clipboard)'
+                    : 'Quick Screenshot: OFF (shows popup)'}
+                onClick={toggleQuickScreenshot}
+                active={quickScreenshotMode}
+                activeColor="blue"
+                size="sm"
+            />
+
+            {/* FULL PAGE SCREENSHOT — auto-scroll + stitch (Android) */}
+            <IconButton
+                icon={ScanLine}
+                tooltip="Full Page Screenshot (Android)"
+                onClick={handleLongScreenshot}
+                disabled={!isMirroring || selectedDevice?.kind !== 'android'}
+                size="sm"
             />
 
             {/* RECORD — via scrcpy --record */}
             <IconButton
                 onClick={handleRecord}
-                icon={Circle}
+                icon={isRecording ? CircleStop : Circle}
                 tooltip={isRecording ? `Stop Recording ${formatElapsed(recordElapsed)}` : 'Record'}
                 active={isRecording}
                 activeColor="red"
-                disabled={!isMirroring && !(selectedDevice?.kind === 'ios' && isIosMirroring)}
+                disabled={(!isMirroring && !(selectedDevice?.kind === 'ios' && isIosMirroring)) || isTogglingRecord}
             />
 
             {/* KEEP AWAKE */}
@@ -493,16 +543,17 @@ function App() {
             <IconButton
                 onClick={toggleAlwaysOnTop}
                 icon={alwaysOnTop ? Pin : PinOff}
-                tooltip={alwaysOnTop ? 'Pinned on top' : 'Click to pin on top'}
+                tooltip={alwaysOnTop ? 'Unpin from top' : 'Pin to top'}
                 active={alwaysOnTop}
                 activeColor="blue"
             />
 
-            {/* MORE OPTIONS */}
+            {/* THEME TOGGLE — main process owns state, applies via theme:changed */}
             <IconButton
-                onClick={() => electron.showContextMenu({ theme, alwaysOnTop })}
-                icon={MoreVertical}
-                tooltip="More options"
+                onClick={handleThemeToggle}
+                icon={theme === 'dark' ? Sun : Moon}
+                tooltip={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                size="sm"
             />
 
             {/* CLOSE */}
@@ -514,47 +565,6 @@ function App() {
             />
 
             {/* MODALS & TOASTS */}
-            {showWifiConnect && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/60">
-                    <div className="bg-[#1a1a1f] border border-white/10 shadow-lg rounded-xl w-full max-w-[260px] p-5">
-                        <h3 className="text-base font-semibold mb-2 text-white">Connect via Wi-Fi</h3>
-                        <p className="text-xs text-white/50 mb-4">
-                            Make sure your phone and PC are on the same Wi-Fi network. 
-                            Enable "Wireless debugging" on your Android 11+ device and enter the IP and port below.
-                        </p>
-                        <input 
-                            type="text" 
-                            placeholder="e.g. 192.168.1.5:5555"
-                            style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-                            className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm text-white mb-4 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            value={wifiIp}
-                            onChange={(e) => setWifiIp(e.target.value)}
-                            onKeyDown={e => e.key === 'Enter' && handleConnectWifi()}
-                        />
-                        <div className="space-y-2">
-                            <button
-                                style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-                                className="w-full px-4 py-2 rounded-md bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 text-sm"
-                                disabled={!selectedDevice || autoDiscoverInProgress}
-                                onClick={handleDiscoverIp}
-                            >
-                                {autoDiscoverInProgress ? 'Discovering IP…' : 'Auto discover device IP'}
-                            </button>
-                            <button
-                                style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-                                className="w-full px-4 py-2 rounded-md bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 text-sm"
-                                disabled={!selectedDevice}
-                                onClick={handleEnableWifi}
-                            >Enable Wireless Debugging (adb tcpip 5555)</button>
-                        </div>
-                        <div className="flex justify-end space-x-2 mt-4">
-                            <button style={{ WebkitAppRegion: 'no-drag' } as CSSProperties} className="px-3 py-1.5 text-sm rounded-md text-white/60 hover:bg-white/10" onClick={() => setShowWifiConnect(false)}>Cancel</button>
-                            <button style={{ WebkitAppRegion: 'no-drag' } as CSSProperties} className="px-3 py-1.5 text-sm rounded-md bg-blue-500 text-white font-medium hover:bg-blue-600" onClick={handleConnectWifi}>Connect</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             {driversMissing && (
                 <div className="fixed left-[72px] top-2 z-40 w-[280px] flex items-start flex-wrap gap-2 px-3 py-2.5 rounded-lg shadow-lg border border-blue-500/30 bg-blue-50 text-blue-900 dark:bg-blue-950/90 dark:text-blue-100 text-xs">
                     <span className="flex-1 min-w-0">No iOS devices found. Install the <span className="font-medium">Apple Devices</span> app from the Microsoft Store to enable iOS support.</span>
@@ -583,9 +593,9 @@ function App() {
                 {toasts.map(toast => (
                     <div key={toast.id} className={cn(
                         "px-4 py-3 rounded-lg shadow-lg border text-sm flex items-center space-x-3 transition-opacity duration-300",
-                        toast.type === 'success' ? 'bg-[#1a1a1f] border-green-500/20 text-white/90'
-                            : toast.type === 'info' ? 'bg-[#1a1a1f] border-blue-500/30 text-white/90'
-                            : 'bg-[#2a1215] border-red-500/30 text-red-100'
+                        toast.type === 'success' ? 'bg-white dark:bg-[#1a1a1f] border-green-500/20 text-gray-800 dark:text-white/90'
+                            : toast.type === 'info' ? 'bg-white dark:bg-[#1a1a1f] border-blue-500/30 text-gray-800 dark:text-white/90'
+                            : 'bg-red-50 dark:bg-[#2a1215] border-red-500/30 text-red-700 dark:text-red-100'
                     )}>
                         {toast.type === 'success'
                             ? <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
@@ -600,7 +610,7 @@ function App() {
                                 style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                                 className={cn(
                                     "ml-1 px-2 py-1 rounded text-xs font-medium whitespace-nowrap",
-                                    toast.type === 'success' ? "bg-blue-500 text-white hover:bg-blue-600" : "bg-white/20 hover:bg-white/30"
+                                    toast.type === 'success' ? "bg-blue-500 text-white hover:bg-blue-600" : "bg-black/10 hover:bg-black/20 dark:bg-white/20 dark:hover:bg-white/30"
                                 )}
                             >
                                 {toast.action.label}
@@ -615,22 +625,29 @@ function App() {
 
 const ScreenshotPopup = () => {
     const [imgSrc, setImgSrc] = useState<string | null>(null);
+    // Ref, not state: the fallback timer's closure would otherwise see a
+    // stale null imgSrc forever (this effect never re-runs), so the
+    // redundant get-data IPC fired on every screenshot even after a
+    // successful push. Refs update synchronously and are immune to that.
+    const hasReceivedPush = useRef(false);
 
     useEffect(() => {
-        console.log('[popup] mounted, hash =', window.location.hash);
+        debugLog('screenshot', 'popup mounted, hash =', window.location.hash);
         // Listen for data pushed from main (fast path)
         electron.onScreenshotDataPush((data: { base64: string; tempPath: string }) => {
-            console.log('[popup] received push, base64 len =', data.base64.length);
+            hasReceivedPush.current = true;
+            debugLog('screenshot', 'received push, base64 len =', data.base64.length);
             setImgSrc(`data:image/png;base64,${data.base64}`);
         });
 
-        // Fallback: pull if push hasn't arrived within 500ms
+        // Fallback: pull only if the push genuinely never arrived
         const fallbackTimer = setTimeout(async () => {
-            console.log('[popup] fallback firing (no push within 500ms)');
+            if (hasReceivedPush.current) return;  // ref check, not state check
+            debugLog('screenshot', 'fallback firing (no push within 500ms)');
             const res: any = await electron.screenshotGetData();
-            console.log('[popup] fallback get-data result:', res?.success);
+            debugLog('screenshot', 'fallback get-data result:', res?.success);
             if (res?.success) {
-                setImgSrc(prev => prev ?? `data:image/png;base64,${res.base64}`);
+                setImgSrc(`data:image/png;base64,${res.base64}`);
             }
         }, 500);
 
@@ -655,35 +672,35 @@ const ScreenshotPopup = () => {
     return (
         <div
             style={{ WebkitAppRegion: 'drag', boxShadow: '0 12px 40px rgba(0,0,0,0.7)' } as CSSProperties}
-            className="h-screen w-full rounded-2xl overflow-hidden bg-[#1a1a22]/95 backdrop-blur-sm border border-white/10 flex flex-col p-3"
+            className="h-screen w-full rounded-2xl overflow-hidden bg-white/95 dark:bg-[#1a1a22]/95 backdrop-blur-sm border border-gray-200 dark:border-white/10 flex flex-col p-3"
         >
             <div className="flex items-center justify-between mb-2" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}>
                 <div className="flex items-center gap-2">
                     <Camera size={14} className="text-blue-400" />
-                    <span className="text-[12px] text-white font-medium">Screenshot captured</span>
+                    <span className="text-[12px] text-gray-800 dark:text-white font-medium">Screenshot captured</span>
                 </div>
                 <button
                     onClick={() => electron.screenshotDismiss()}
                     style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-                    className="w-5 h-5 rounded flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/10"
+                    className="w-5 h-5 rounded flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 dark:text-white/40 dark:hover:text-white/80 dark:hover:bg-white/10"
                 >
                     <X size={12} />
                 </button>
             </div>
             {imgSrc ? (
-                <div className="flex-1 rounded-lg overflow-hidden bg-black/40 mb-2 flex items-center justify-center">
+                <div className="flex-1 rounded-lg overflow-hidden bg-gray-100 dark:bg-black/40 mb-2 flex items-center justify-center">
                     <img src={imgSrc} alt="Screenshot" className="max-h-full max-w-full object-contain" />
                 </div>
             ) : (
-                <div className="flex-1 rounded-lg bg-white/5 mb-2 animate-pulse flex items-center justify-center">
-                    <span className="text-white/20 text-xs">Loading...</span>
+                <div className="flex-1 rounded-lg bg-gray-100 dark:bg-white/5 mb-2 animate-pulse flex items-center justify-center">
+                    <span className="text-gray-300 dark:text-white/20 text-xs">Loading...</span>
                 </div>
             )}
             <div className="flex gap-2" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}>
                 <button
                     onClick={() => electron.screenshotCopyClipboard()}
                     style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-                    className="flex-1 py-1.5 rounded-lg bg-white/10 border border-white/10 text-[11px] text-white/70 hover:bg-white/15 transition-all"
+                    className="flex-1 py-1.5 rounded-lg bg-gray-100 border border-gray-200 text-[11px] text-gray-600 hover:bg-gray-200 dark:bg-white/10 dark:border-white/10 dark:text-white/70 dark:hover:bg-white/15 transition-all"
                 >
                     Copy Image
                 </button>
@@ -695,7 +712,7 @@ const ScreenshotPopup = () => {
                     Save As…
                 </button>
             </div>
-            <div className="mt-2 h-0.5 bg-white/10 rounded-full overflow-hidden">
+            <div className="mt-2 h-0.5 bg-gray-200 dark:bg-white/10 rounded-full overflow-hidden">
                 <div className="h-full bg-blue-400/50 rounded-full animate-[shrink_10s_linear_forwards]" />
             </div>
         </div>
@@ -726,25 +743,23 @@ const sizeMap: Record<NonNullable<IconButtonProps['size']>, { btn: string; icon:
 };
 
 const IconButton = ({ icon: Icon, tooltip, onClick, active, activeColor = 'blue', disabled, size = 'md' }: IconButtonProps) => (
-    <div className="relative group">
+    <div>
         <button
             onClick={onClick}
             disabled={disabled}
+            title={tooltip}
             style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
             className={`
                 ${sizeMap[size].btn} rounded-xl border flex items-center justify-center transition-all duration-150
                 ${active
                     ? colorMap[activeColor]
-                    : 'border-white/10 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80'
+                    : 'border-gray-200 bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 dark:border-white/10 dark:bg-white/5 dark:text-white/50 dark:hover:bg-white/10 dark:hover:text-white/80'
                 }
                 ${disabled ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}
             `}
         >
             <Icon size={sizeMap[size].icon} />
         </button>
-        <div className="absolute left-14 top-1/2 -translate-y-1/2 bg-[#1f1f26] border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity duration-150">
-            {tooltip}
-        </div>
     </div>
 );
 
